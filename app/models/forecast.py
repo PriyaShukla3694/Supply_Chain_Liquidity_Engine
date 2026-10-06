@@ -7,7 +7,7 @@ class Forecast(Base):
     __tablename__ = "forecasts"
 
     id = Column(Integer, primary_key=True, autoincrement=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id", ondelete="SET NULL"), nullable=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="RESTRICT"), nullable=True, index=True)
     forecast_date = Column(Date, nullable=False, index=True)
     horizon_days = Column(Integer, nullable=False, index=True)
     expected_inflow = Column(Numeric(14, 2), nullable=False, default=0.00)

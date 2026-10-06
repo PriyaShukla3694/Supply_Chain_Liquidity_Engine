@@ -8,7 +8,7 @@ class Supplier(Base):
 
     supplier_id = Column(String(50), primary_key=True, index=True)
     name = Column(String(255), nullable=True)
-    company_id = Column(Integer, ForeignKey("companies.id", ondelete="SET NULL"), nullable=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="RESTRICT"), nullable=True, index=True)
     contact_email = Column(String(255), nullable=True)
     contact_phone = Column(String(50), nullable=True)
     country_code = Column(String(10), nullable=True)

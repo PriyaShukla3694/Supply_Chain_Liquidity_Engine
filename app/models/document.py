@@ -7,7 +7,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(Integer, primary_key=True, autoincrement=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="RESTRICT"), nullable=False, index=True)
     document_name = Column(String(255), nullable=False, index=True)
     document_type = Column(String(50), nullable=False, index=True)  # policy / contract / sop
     version = Column(String(50), default="1.0", nullable=False)

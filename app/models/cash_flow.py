@@ -7,7 +7,7 @@ class CashFlow(Base):
     __tablename__ = "cash_flows"
 
     id = Column(Integer, primary_key=True, autoincrement=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id", ondelete="SET NULL"), nullable=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="RESTRICT"), nullable=True, index=True)
     date = Column(Date, nullable=False, index=True)
     inflow_actual = Column(Numeric(14, 2), nullable=False, default=0.00)
     outflow_actual = Column(Numeric(14, 2), nullable=False, default=0.00)
