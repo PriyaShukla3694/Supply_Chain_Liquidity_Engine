@@ -68,6 +68,12 @@ def test_supplier_and_buyer_creation(db_session):
     db_session.add(company)
     db_session.commit()
 
+    # Verify supplier works with ONLY supplier_id (all other columns nullable)
+    minimal_supplier = Supplier(supplier_id="SUP-99")
+    db_session.add(minimal_supplier)
+    db_session.commit()
+    assert minimal_supplier.name is None
+
     supplier = Supplier(
         supplier_id="SUP-02",
         name="Global Steel Ltd",
@@ -83,7 +89,7 @@ def test_supplier_and_buyer_creation(db_session):
         country_code="IN",
         primary_supplier_id="SUP-02",
         behavioural_segment="Prompt Payer",
-        tier="Tier-A",
+        tier="A",
         credit_limit=Decimal("5000000.00"),
         discount_responsiveness=0.85,
         blacklisted=False,
@@ -98,12 +104,20 @@ def test_supplier_and_buyer_creation(db_session):
     assert retrieved_buyer is not None
     assert retrieved_buyer.primary_supplier.name == "Global Steel Ltd"
     assert retrieved_buyer.credit_limit == Decimal("5000000.00")
+    assert retrieved_buyer.tier == "A"
+
+    # Verify buyer tier check constraint (tier not in 'A', 'B', 'C' and not null raises IntegrityError)
+    invalid_buyer = Buyer(buyer_id="0188-INVALID", tier="D")
+    db_session.add(invalid_buyer)
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
 
 
 @pytest.mark.unit
 def test_invoice_bigint_and_relationships(db_session):
     supplier = Supplier(supplier_id="SUP-01", name="Apex Supplies")
-    buyer = Buyer(buyer_id="BUY-100", country_code="IN")
+    buyer = Buyer(buyer_id="BUY-100", country_code="IN", tier="B")
     db_session.add_all([supplier, buyer])
     db_session.commit()
 
@@ -143,7 +157,7 @@ def test_discount_offer_creation(db_session):
         company_id=company.id,
     )
     supplier = Supplier(supplier_id="SUP-03", name="Steel Inc")
-    buyer = Buyer(buyer_id="BUY-200", country_code="IN")
+    buyer = Buyer(buyer_id="BUY-200", country_code="IN", tier="A")
     db_session.add_all([user, supplier, buyer])
     db_session.commit()
 
@@ -160,6 +174,12 @@ def test_discount_offer_creation(db_session):
     db_session.add(invoice)
     db_session.commit()
 
+    payload_data = {
+        "reasons": ["strong_payment_history", "sufficient_liquidity"],
+        "delay_probability": 0.12,
+        "liquidity_status": "HEALTHY",
+    }
+
     offer = DiscountOffer(
         offer_id="OFF-2026-0001",
         invoice_id=1000001,
@@ -175,6 +195,7 @@ def test_discount_offer_creation(db_session):
         approved_by=user.id,
         approved_at=datetime.now(timezone.utc),
         requires_approval=False,
+        recommendation_payload=payload_data,
     )
     db_session.add(offer)
     db_session.commit()
@@ -183,11 +204,12 @@ def test_discount_offer_creation(db_session):
     assert retrieved is not None
     assert retrieved.approved_by_user.username == "fin_mgr"
     assert retrieved.invoice.invoice_amount == Decimal("200000.00")
+    assert retrieved.recommendation_payload["liquidity_status"] == "HEALTHY"
 
 
 @pytest.mark.unit
 def test_risk_scores_and_check_constraints(db_session):
-    buyer = Buyer(buyer_id="BUY-300", country_code="IN")
+    buyer = Buyer(buyer_id="BUY-300", country_code="IN", tier="A")
     db_session.add(buyer)
     db_session.commit()
 
@@ -197,7 +219,7 @@ def test_risk_scores_and_check_constraints(db_session):
         financial_risk=Decimal("20.00"),
         liquidity_risk=Decimal("15.00"),
         overall_risk=Decimal("78.00"),
-        tier="Tier-A",
+        tier="A",
         model_version="v1.0",
     )
     db_session.add(valid_risk)
@@ -210,22 +232,38 @@ def test_risk_scores_and_check_constraints(db_session):
         financial_risk=Decimal("20.00"),
         liquidity_risk=Decimal("15.00"),
         overall_risk=Decimal("78.00"),
-        tier="Tier-A",
+        tier="A",
     )
     db_session.add(invalid_risk)
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
 
+    # Invalid tier test (e.g. 'Z') should trigger tier check constraint
+    invalid_tier_risk = RiskScore(
+        buyer_id="BUY-300",
+        payment_reliability=Decimal("70.00"),
+        financial_risk=Decimal("30.00"),
+        liquidity_risk=Decimal("30.00"),
+        overall_risk=Decimal("50.00"),
+        tier="Z",
+    )
+    db_session.add(invalid_tier_risk)
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
 
 @pytest.mark.unit
-def test_cash_flow_and_forecast(db_session):
-    company = Company(name="Supply Chain Corp")
-    db_session.add(company)
+def test_cash_flow_composite_unique_and_forecast(db_session):
+    comp1 = Company(name="Supply Chain Corp")
+    comp2 = Company(name="Partner Corp")
+    db_session.add_all([comp1, comp2])
     db_session.commit()
 
-    cf = CashFlow(
-        company_id=company.id,
+    # Two different companies with the same date must succeed
+    cf1 = CashFlow(
+        company_id=comp1.id,
         date=date(2026, 4, 1),
         inflow_actual=Decimal("500000.00"),
         outflow_actual=Decimal("350000.00"),
@@ -236,10 +274,34 @@ def test_cash_flow_and_forecast(db_session):
         min_cash_buffer=Decimal("500000.00"),
         liquidity_gap=Decimal("0.00"),
     )
-    db_session.add(cf)
+    cf2 = CashFlow(
+        company_id=comp2.id,
+        date=date(2026, 4, 1),
+        inflow_actual=Decimal("300000.00"),
+        outflow_actual=Decimal("200000.00"),
+        net_cash_flow=Decimal("100000.00"),
+        opening_balance=Decimal("500000.00"),
+        closing_balance=Decimal("600000.00"),
+        outstanding_receivables=Decimal("800000.00"),
+        min_cash_buffer=Decimal("200000.00"),
+        liquidity_gap=Decimal("0.00"),
+    )
+    db_session.add_all([cf1, cf2])
+    db_session.commit()
+
+    # Same company on the same date must fail due to UniqueConstraint(company_id, date)
+    duplicate_cf = CashFlow(
+        company_id=comp1.id,
+        date=date(2026, 4, 1),
+        inflow_actual=Decimal("10000.00"),
+    )
+    db_session.add(duplicate_cf)
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
 
     fc = Forecast(
-        company_id=company.id,
+        company_id=comp1.id,
         forecast_date=date(2026, 4, 1),
         horizon_days=7,
         expected_inflow=Decimal("200000.00"),
@@ -251,7 +313,8 @@ def test_cash_flow_and_forecast(db_session):
     db_session.add(fc)
     db_session.commit()
 
-    assert cf.id is not None
+    assert cf1.id is not None
+    assert cf2.id is not None
     assert fc.id is not None
     assert fc.status == "URGENT"
 
@@ -314,7 +377,7 @@ def test_documents_chunks_and_audit_logs(db_session):
 @pytest.mark.unit
 def test_payments_and_transactions(db_session):
     supplier = Supplier(supplier_id="SUP-04", name="Logistics Partner")
-    buyer = Buyer(buyer_id="BUY-400", country_code="IN")
+    buyer = Buyer(buyer_id="BUY-400", country_code="IN", tier="B")
     db_session.add_all([supplier, buyer])
     db_session.commit()
 
@@ -367,7 +430,7 @@ def test_payments_and_transactions(db_session):
 @pytest.mark.unit
 def test_model_predictions(db_session):
     supplier = Supplier(supplier_id="SUP-05", name="Parts Corp")
-    buyer = Buyer(buyer_id="BUY-500", country_code="IN")
+    buyer = Buyer(buyer_id="BUY-500", country_code="IN", tier="C")
     db_session.add_all([supplier, buyer])
     db_session.commit()
 

@@ -1,4 +1,5 @@
-from sqlalchemy import Column, BigInteger, String, Boolean, Integer, Date, DateTime, Numeric, ForeignKey, CheckConstraint, func
+from sqlalchemy import Column, BigInteger, String, Boolean, Integer, Date, DateTime, Numeric, ForeignKey, CheckConstraint, JSON, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 
@@ -20,6 +21,7 @@ class DiscountOffer(Base):
     approved_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
     requires_approval = Column(Boolean, default=False, nullable=False)
+    recommendation_payload = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
 

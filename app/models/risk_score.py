@@ -12,7 +12,7 @@ class RiskScore(Base):
     financial_risk = Column(Numeric(5, 2), nullable=False)
     liquidity_risk = Column(Numeric(5, 2), nullable=False)
     overall_risk = Column(Numeric(5, 2), nullable=False)
-    tier = Column(String(20), nullable=True, index=True)  # Tier-A, Tier-B, Tier-C
+    tier = Column(String(20), nullable=True, index=True)  # 'A', 'B', 'C' or NULL
     computed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     model_version = Column(String(50), default="v1.0", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
@@ -22,6 +22,7 @@ class RiskScore(Base):
         CheckConstraint("financial_risk >= 0 AND financial_risk <= 100", name="ck_risk_scores_financial_risk"),
         CheckConstraint("liquidity_risk >= 0 AND liquidity_risk <= 100", name="ck_risk_scores_liquidity_risk"),
         CheckConstraint("overall_risk >= 0 AND overall_risk <= 100", name="ck_risk_scores_overall_risk"),
+        CheckConstraint("tier IS NULL OR tier IN ('A', 'B', 'C')", name="ck_risk_scores_tier"),
     )
 
     # Relationships
