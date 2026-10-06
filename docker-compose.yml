@@ -1,6 +1,6 @@
 services:
   db:
-    image: pgvector/pgvector:16-pgdg
+    image: pgvector/pgvector:pg16
     container_name: dynamic_discounting_db
     restart: always
     environment:

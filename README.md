@@ -46,8 +46,26 @@ This is the repository scaffold for Week 1 of the project.
    - **DB Connectivity Health Check**: `GET http://localhost:8000/health/db`
    - **Interactive Swagger Docs**: `GET http://localhost:8000/docs`
 
+4. **Database Migrations (Alembic):**
+   - Apply migrations to head:
+     ```bash
+     docker compose exec backend alembic upgrade head
+     ```
+   - Generate a new revision:
+     ```bash
+     docker compose exec backend alembic revision --autogenerate -m "migration_description"
+     ```
+   - Rollback migration:
+     ```bash
+     docker compose exec backend alembic downgrade -1
+     ```
+   - View current migration status:
+     ```bash
+     docker compose exec backend alembic current
+     ```
+
 ## Real vs. Placeholder Features
 
-- **Real Database Session Setup**: SQLAlchemy is configured to connect to PostgreSQL. The `/health/db` endpoint tests this connection live.
+- **Real Database Session Setup**: SQLAlchemy 2.0 is configured to connect to PostgreSQL (pgvector). The `/health/db` endpoint tests this connection live.
+- **Complete Database Schema & Migrations**: All business entities (users, companies, buyers, suppliers, invoices, payments, transactions, cash_flows, risk_scores, discount_offers, forecasts, model_predictions, documents, document_chunks, audit_logs, business_rules) are implemented in `app/models/` and managed with Alembic.
 - **In-Memory JWT Auth**: The registration and login endpoints are functional skeleton routes.
-- **Next Step - Real DB Models**: Wiring the auth and business entities to PostgreSQL tables in `app/models/`.
