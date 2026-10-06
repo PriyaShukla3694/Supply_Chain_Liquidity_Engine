@@ -7,7 +7,7 @@ class ModelPrediction(Base):
     __tablename__ = "model_predictions"
 
     id = Column(Integer, primary_key=True, autoincrement=True, index=True)
-    invoice_id = Column(BigInteger, ForeignKey("invoices.invoice_id", ondelete="CASCADE"), nullable=False, index=True)
+    invoice_id = Column(BigInteger, ForeignKey("invoices.invoice_id", ondelete="RESTRICT"), nullable=False, index=True)
     model_name = Column(String(100), default="payment_delay_predictor", nullable=False)
     model_version = Column(String(50), default="v1.0", nullable=False)
     late_probability = Column(Float, nullable=False)

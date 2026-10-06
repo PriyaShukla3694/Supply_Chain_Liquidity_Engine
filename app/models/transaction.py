@@ -7,7 +7,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     transaction_id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True, index=True)
-    payment_id = Column(BigInteger, ForeignKey("payments.payment_id", ondelete="SET NULL"), nullable=True, index=True)
+    payment_id = Column(BigInteger, ForeignKey("payments.payment_id", ondelete="RESTRICT"), nullable=True, index=True)
     transaction_type = Column(String(50), nullable=False, index=True)  # credit / debit
     amount = Column(Numeric(14, 2), nullable=False)
     transaction_date = Column(DateTime(timezone=True), nullable=False, index=True)

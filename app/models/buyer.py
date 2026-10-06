@@ -8,7 +8,7 @@ class Buyer(Base):
 
     buyer_id = Column(String(50), primary_key=True, index=True)
     country_code = Column(String(10), nullable=True)
-    primary_supplier_id = Column(String(50), ForeignKey("suppliers.supplier_id", ondelete="SET NULL"), nullable=True, index=True)
+    primary_supplier_id = Column(String(50), ForeignKey("suppliers.supplier_id", ondelete="RESTRICT"), nullable=True, index=True)
     behavioural_segment = Column(String(100), nullable=True)
     tier = Column(String(20), nullable=True, index=True)  # 'A', 'B', 'C' or NULL
     credit_limit = Column(Numeric(14, 2), nullable=True, default=0.00)

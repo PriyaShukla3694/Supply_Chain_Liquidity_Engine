@@ -7,8 +7,8 @@ class Invoice(Base):
     __tablename__ = "invoices"
 
     invoice_id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=False, index=True)
-    buyer_id = Column(String(50), ForeignKey("buyers.buyer_id", ondelete="CASCADE"), nullable=False, index=True)
-    supplier_id = Column(String(50), ForeignKey("suppliers.supplier_id", ondelete="CASCADE"), nullable=False, index=True)
+    buyer_id = Column(String(50), ForeignKey("buyers.buyer_id", ondelete="RESTRICT"), nullable=False, index=True)
+    supplier_id = Column(String(50), ForeignKey("suppliers.supplier_id", ondelete="RESTRICT"), nullable=False, index=True)
     invoice_date = Column(Date, nullable=False, index=True)
     due_date = Column(Date, nullable=False, index=True)
     payment_terms_days = Column(Integer, nullable=False, default=30)

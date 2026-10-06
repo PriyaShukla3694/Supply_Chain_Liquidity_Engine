@@ -7,7 +7,7 @@ class Payment(Base):
     __tablename__ = "payments"
 
     payment_id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True, index=True)
-    invoice_id = Column(BigInteger, ForeignKey("invoices.invoice_id", ondelete="CASCADE"), nullable=False, index=True)
+    invoice_id = Column(BigInteger, ForeignKey("invoices.invoice_id", ondelete="RESTRICT"), nullable=False, index=True)
     payment_date = Column(Date, nullable=False, index=True)
     payment_amount = Column(Numeric(14, 2), nullable=False)
     payment_method = Column(String(50), nullable=True)

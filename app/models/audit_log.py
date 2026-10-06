@@ -8,7 +8,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True)
     action = Column(String(100), nullable=False, index=True)
     entity_type = Column(String(100), nullable=False, index=True)
     entity_id = Column(String(100), nullable=True, index=True)

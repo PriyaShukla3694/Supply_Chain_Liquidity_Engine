@@ -8,8 +8,8 @@ class DiscountOffer(Base):
     __tablename__ = "discount_offers"
 
     offer_id = Column(String(100), primary_key=True, index=True)
-    invoice_id = Column(BigInteger, ForeignKey("invoices.invoice_id", ondelete="CASCADE"), nullable=False, index=True)
-    buyer_id = Column(String(50), ForeignKey("buyers.buyer_id", ondelete="CASCADE"), nullable=False, index=True)
+    invoice_id = Column(BigInteger, ForeignKey("invoices.invoice_id", ondelete="RESTRICT"), nullable=False, index=True)
+    buyer_id = Column(String(50), ForeignKey("buyers.buyer_id", ondelete="RESTRICT"), nullable=False, index=True)
     offer_date = Column(Date, nullable=False, index=True)
     deadline_date = Column(Date, nullable=False, index=True)
     offered_rate_pct = Column(Numeric(6, 4), nullable=False)
@@ -18,7 +18,7 @@ class DiscountOffer(Base):
     days_accelerated = Column(Integer, nullable=False)
     status = Column(String(50), default="recommended", nullable=False, index=True)
     recommended_by = Column(String(100), default="optimizer", nullable=False)
-    approved_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    approved_by = Column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
     requires_approval = Column(Boolean, default=False, nullable=False)
     recommendation_payload = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)

@@ -7,7 +7,7 @@ class RiskScore(Base):
     __tablename__ = "risk_scores"
 
     id = Column(Integer, primary_key=True, autoincrement=True, index=True)
-    buyer_id = Column(String(50), ForeignKey("buyers.buyer_id", ondelete="CASCADE"), nullable=False, index=True)
+    buyer_id = Column(String(50), ForeignKey("buyers.buyer_id", ondelete="RESTRICT"), nullable=False, index=True)
     payment_reliability = Column(Numeric(5, 2), nullable=False)
     financial_risk = Column(Numeric(5, 2), nullable=False)
     liquidity_risk = Column(Numeric(5, 2), nullable=False)
