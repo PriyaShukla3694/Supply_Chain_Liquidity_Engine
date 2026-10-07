@@ -1,120 +1,239 @@
 # Business Rules — AI-Driven Dynamic Discounting & Liquidity Engine
-**Status:** Final v2 — agreed by Person A + Person B (Aug 13–14, 2026). This is now the source of truth for the DB schema, ML labels, and optimizer. Changes after this point should be discussed by both, not made unilaterally, since downstream work depends on these numbers being stable.
+**Status:** LOCKED FINAL (superseding v2). This is the source of truth for the DB schema, ML labels, optimizer, and datasets. Downstream code, schemas, and models must strictly adhere to these locked decisions.
 
 ---
 
 ## 1. Buyer Risk Tiers
 
-Buyers are scored 0–100 (overall risk score) and bucketed into a tier. Tier drives the max allowed discount (Section 3) and the optimizer's constraints.
+Buyers are scored 0–100 (overall buyer score) and bucketed into a tier. Tier drives the max allowed discount (Section 4) and the optimizer's constraints.
 
 | Tier | Score Range | Meaning |
 |---|---|---|
-| Tier-A (Low risk) | 80–100 | Reliable payer, low delay history |
-| Tier-B (Medium risk) | 50–79 | Some delay history or moderate exposure |
-| Tier-C (High risk) | 0–49 | Frequent late payment or high outstanding balance |
+| Tier A | score >= 80 | Reliable payer, low delay history |
+| Tier B | 50 <= score < 80 | Moderate delay history or exposure |
+| Tier C | score < 50 | Frequent late payment or high outstanding balance |
 
-**Overall risk score formula (v1, simple weighted average — refine after ML models exist):**
-```
-overall_risk = 0.4 * payment_reliability + 0.35 * financial_risk + 0.25 * liquidity_risk
-```
-(each sub-score also 0–100; payment_reliability comes from ML Engine 1, financial_risk and liquidity_risk are business-indicator based for v1, can be model-driven later)
+### Buyer Score Formulas
+All three sub-scores are scored 0–100 and are **higher-is-better**:
 
----
+- **Payment Reliability:**
+  ```
+  Reliability = 50 × (1 − late_rate)
+              + 25 × (1 − min(avg_days_late / 15, 1))
+              + 25 × (1 − late_rate_of_last_5_settled)
+  ```
 
-## 2. Payment Delay Labeling (for ML training data)
+- **Financial Exposure:**
+  ```
+  Financial = 100 × (1 − min(open_exposure / credit_limit, 1))
+  ```
 
-- **On-time**: paid on or before `due_date`
-- **Late**: paid after `due_date`
-- **Severely late**: paid more than 30 days after `due_date` (flag separately — useful for risk scoring, not just binary classification)
-- Invoices with no `payment_date` yet (still outstanding) are **excluded** from training labels but **included** in inference (that's exactly what we're predicting for)
+- **Liquidity Health:**
+  ```
+  Liquidity = 100 × (1 − min(overdue_open_exposure / open_exposure, 1))
+  ```
+  *(If `open_exposure = 0`, `Liquidity = 100`)*
 
-**Leakage rule:** never use `payment_date`, `payment_status`, or anything computed after the invoice was issued as a *feature* — only as the *label*. This is the #1 way this kind of project silently breaks.
+- **Overall Buyer Score:**
+  ```
+  Overall Buyer Score = 0.80 × Reliability + 0.10 × Financial + 0.10 × Liquidity
+  ```
+  *(Note: The previous `0.40 * payment_reliability + 0.35 * financial_risk + 0.25 * liquidity_risk` 40/35/25 formula is superseded).*
 
----
-
-## 3. Discount Rules
-
-- **Discount range tested by optimizer:** 0.5% – 3.0% (in 0.5% steps), per the doc's example
-- **Max allowed discount by tier** (policy ceiling — RAG will also check this against actual policy documents once built):
-  | Tier | Max Discount |
-  |---|---|
-  | Tier-A | 1.75% |
-  | Tier-B | 1.25% |
-  | Tier-C | 0.5% (discouraged — high risk buyers rarely get early-payment incentives) |
-- **Minimum invoice amount eligible for discounting:** ₹1,00,000 (below this, discount admin cost isn't worth it — arbitrary v1 cutoff, revisit)
-- **Minimum days remaining to due date to qualify:** 10 days (an invoice due in 3 days isn't a meaningful "early payment" offer)
-
----
-
-## 4. Eligibility Criteria for a Discount Offer
-
-An invoice is **eligible** for a discount offer only if ALL of the following hold:
-1. `payment_status = unpaid` (not already paid or already offered/pending)
-2. `days_to_due_date >= 10`
-3. `invoice_amount >= ₹1,00,000`
-4. Buyer is not flagged `blacklisted` or `disputed`
-5. Buyer's tier allows a non-zero discount (Tier-C invoices only get an offer if liquidity need is urgent — see Section 6)
+### Cold Start Rule
+For buyers with **fewer than 5 resolved invoices**:
+- Assigned provisional **Tier B**
+- **Never Tier A**
+- Set `tier_basis = cold_start`
 
 ---
 
-## 5. Optimizer Objective (v1)
+## 2. Payment Delay Labeling & Severe Delay
+
+### ML Target
+The ML target remains strictly **binary**:
+- `is_late = 1` if paid after `due_date`
+- `is_late = 0` otherwise (paid on or before `due_date`)
+
+### Severe Late Flag & Escalation
+- `severe_late = days_late > 30`
+- For open invoices: `overdue_days > 30 -> ESCALATE`
+- **Do not turn `severe_late` into a separate ML target** (binary classification target remains `is_late`).
+
+### Dataset Distribution
+- Historical dataset late rate is **approximately 34%** (supersedes the outdated 15–20% estimate).
+
+### Training vs. Inference Invoices
+- Invoices with no `payment_date` yet (still outstanding) are **excluded** from training labels but **included** in inference (the operational target of prediction).
+
+### Leakage Rule
+Never use `payment_date`, `payment_status`, or anything computed after the invoice was issued as a feature — only as the label. This is the #1 way dynamic discounting models silently fail.
+
+---
+
+## 3. Dispute Handling & ML Leakage Prevention
+
+`disputed` must **NOT** be used as an ML feature because the timing of dispute availability at invoice issuance is not established and creates feature leakage.
+
+### ML Feature Policy
+Remove from primary ML features:
+- `disputed`
+- `buyer_hist_dispute_rate`
+
+### Business Layer Policy
+- Disputed invoices are **ineligible / HOLD**.
+- Check current invoice dispute status at recommendation time.
+- Check dispute status again immediately before release.
+- **Do NOT create a buyer-level dispute scoring rule.**
+
+---
+
+## 4. Discount Rates & Tier Caps
+
+- **Allowed discount grid:**
+  - `0.5%`
+  - `1.0%`
+  - `1.5%`
+- **Optimizer range:** `0.5% – 1.5%` (tested in grid increments; supersedes old 0.5%–3.0% range).
+- **Max allowed discount by tier (Policy Ceiling):**
+  | Tier | Max Discount | Policy Note |
+  |---|---|---|
+  | Tier A | 1.5% | Cap reduced to 1.5% |
+  | Tier B | 1.0% | Cap reduced to 1.0% |
+  | Tier C | 0.5% | Discouraged; high-risk buyers rarely get incentives |
+- **Liquidity URGENT Exception:** Under `URGENT` liquidity conditions, Tier C may be relaxed up to `1.0%` maximum (see Section 7).
+- **Minimum invoice amount eligible for discounting:** `₹50,000` (supersedes old ₹1,00,000 cutoff).
+- **Minimum days remaining to due date:** `days_until_due >= 10` days (an invoice due in under 10 days does not provide meaningful cash acceleration).
+
+---
+
+## 5. Eligibility Criteria for a Discount Offer
+
+An invoice is **eligible** for a discount offer only if **ALL** of the following hold:
+1. Invoice is open/unpaid (`payment_status = unpaid`, not already paid or offered/pending)
+2. Invoice is not overdue (`overdue_days == 0`)
+3. `days_until_due >= 10`
+4. Invoice is not disputed (`is_disputed = False` / not on hold)
+5. `invoice_amount >= ₹50,000` (do not use the old ₹1,00,000 minimum)
+6. Buyer Tier allows discounts: Tier A and Tier B are eligible; Tier C is excluded unless liquidity status is `URGENT`
+
+---
+
+## 6. Optimizer Objective & Constraints
 
 ```
 Expected Business Value = Liquidity Benefit − Discount Cost − Risk/Constraint Penalty
 ```
 
-**v1 simplification (to make it buildable in Week 4):**
-- `Liquidity Benefit` = invoice_amount × (probability buyer pays significantly later than X days if not offered a discount) — i.e. value of getting cash now vs. waiting
-- `Discount Cost` = invoice_amount × discount_rate
-- `Risk/Constraint Penalty` = 0 if within policy tier max, else a large penalty (effectively excludes that discount rate as infeasible)
+### Operational Formulation
+- `Liquidity Benefit` = `invoice_amount × P(late) × delay_cost_factor` (value of securing cash now vs. waiting)
+- `Discount Cost` = `invoice_amount × discount_rate`
+- `Risk/Constraint Penalty` = 0 if within tier cap, else ∞ (infeasible)
 
-**Hard constraints:**
-- Discount rate ≤ tier max (Section 3)
-- Total discount cost across all offers in a batch ≤ weekly discount budget, calculated as:
+### Hard Constraints
+- **Discount rate ≤ tier max** (Section 4).
+- **Weekly discount budget constraint:**
+  Total discount cost across all offers in a batch ≤ `weekly_budget`, calculated as:
   ```
-  weekly_budget = clamp(0.015 × total_open_invoice_value_this_week, min=₹30,000, max=₹1,00,000)
+  weekly_budget = clamp(
+      0.015 × total eligible invoice value,
+      minimum ₹30,000,
+      maximum ₹1,00,000
+  )
   ```
-  (scales with the actual dataset instead of a fixed number that breaks if invoice volume changes — see Decisions Log, Q2)
-- **Per-buyer offer frequency:** a buyer cannot receive more than 1 discount offer per rolling 14-day window, even if multiple invoices are technically eligible (see Decisions Log, Q3)
-- Never offer a discount if `on_time_probability >= 90%` AND no urgent liquidity gap exists (don't pay a buyer who was going to pay on time anyway — this is the exact "fixed 2% for everyone is dumb" problem the whole project solves, so enforce it strictly)
+  *(Important: Use **eligible invoice value** as the base, not total open invoice value).*
+- **Per-buyer offer frequency:**
+  - Maximum **one offer per buyer per run**.
+  - A buyer must have **at least 14 days since the previous non-rejected offer** before receiving another offer.
+- **On-time filter:** Never offer a discount if predicted `on_time_probability >= 90%` AND no urgent liquidity gap exists (avoid paying buyers who would pay on time anyway).
 
 ---
 
-## 6. Liquidity Gap → Urgency Rule
+## 7. Liquidity Gap → Urgency Rule
 
-- If forecasted 7-day net liquidity is **negative**, mark liquidity status as `URGENT`
-- If forecasted 30-day net liquidity is negative but 7-day is positive, mark as `WATCH`
-- Otherwise `HEALTHY`
-- Under `URGENT`, the optimizer is allowed to relax the Tier-C discount rule (Section 3) up to 1% max, since the doc's whole liquidity-crisis scenario (Section 31, "need ₹20L in 7 days") assumes the system can act even on riskier buyers when cash is genuinely tight
-
----
-
-## 7. Human Approval Rule (non-negotiable, per doc Section 26)
-
-- Any discount offer with `discount_amount > ₹20,000` OR `invoice_amount > ₹10,00,000` requires explicit human approval before status moves from `recommended` → `offered`
-- The AI/LLM can never change `discount_offers.status` directly — only a human action via the approved API endpoint can
-- Every approval/rejection is written to `audit_logs` with user_id, timestamp, and the full recommendation payload that was approved/rejected
+- If forecasted 7-day net liquidity is **negative**, mark liquidity status as `URGENT`.
+- If forecasted 30-day net liquidity is negative but 7-day is positive, mark as `WATCH`.
+- Otherwise `HEALTHY`.
+- Under `URGENT`, the optimizer is allowed to relax the Tier C discount cap up to `1.0%` max, enabling cash generation from riskier counterparties during verified shortfalls.
 
 ---
 
-## 8. Data Field → Rule Mapping (for Person B's synthetic data generator)
+## 8. Human Approval Governance
 
-So the synthetic data actually reflects these rules instead of being random:
-- Buyers should have a `payment_reliability` score that **correlates** with their historical `payment_date - due_date` deltas (reliable buyers should mostly show up as on-time in the generated payment history)
-- ~15–20% of invoices should be "late" in the synthetic set (avoid extreme class imbalance for v1 — can add more imbalance later once baseline model works, per doc Section 27 imbalance note)
-- Distribute buyers roughly: 40% Tier-A, 40% Tier-B, 20% Tier-C, so all three tiers are testable in the optimizer
+Human approval is required when:
+```
+discount_amount > ₹1,000
+OR
+invoice_amount > ₹1,00,000
+```
+*(Do not use the old ₹20,000 / ₹10,00,000 thresholds).*
+
+- **Strict AI boundaries:** The AI/LLM cannot change `discount_offers.status` directly — only an authorized human action via the approved API endpoint can advance status from `recommended` → `offered`.
+- **Audit trail:** Every approval or rejection is logged to `audit_logs` with `user_id`, `timestamp`, and the full recommendation payload.
 
 ---
 
-## Decisions Log (finalized Aug 13–14, 2026)
+## 9. Amount Units & Model/Business Boundary
+
+- Business/DB/runtime = ₹
+- ML CSVs = ₹000
+- Training loader converts monetary ML fields to ₹ by multiplying by 1,000 where required.
+- Seed-data/business loaders convert ₹000 monetary display fields to ₹ exactly once.
+- Ratios are unitless.
+- No double conversion.
+
+---
+
+## 10. Payment Terms & Dataset Limitations
+
+- **Net 30 Only:** The current dataset contains Net 30 only (`due_date = invoice_date + 30 days`).
+- **Documented Limitation:** This is a documented dataset limitation.
+- **Dynamic Logic:** Business logic must calculate eligibility from the actual `due_date` / `days_until_due` dynamically rather than hard-coding 30.
+- **Integrity Rule:** Do **NOT** artificially add 60/90-day records.
+
+---
+
+## 11. Simulated Offer History Governance
+
+- Existing simulated offer history is **demonstration history only**.
+- It **must NOT be used for ML training or tuning**.
+- Required metadata tags:
+  ```
+  data_origin = SIMULATED_DEMONSTRATION_OFFER_HISTORY
+  ml_use_allowed = 0
+  ```
+
+---
+
+## 12. Data Field → Rule Mapping (Synthetic Generator Specifications)
+
+- Buyers must have a `payment_reliability` score calculated using the Section 1 formula.
+- Historical dataset late rate is approximately **34%** (supersedes 15–20%).
+- Strict Net 30 terms observed across all invoice generations.
+
+---
+
+## Decisions Log (Locked Final Decisions)
 
 **Q1 — Gross invoice amount or net margin for discount cost?**
-**Decision: gross amount.** Net margin would need real COGS data we don't have; estimating it synthetically adds noise without adding credibility. Documented as a stated simplification in the README, not hidden.
+**Decision: Gross amount.** Net margin requires COGS data not available; estimating it synthetically adds noise without credibility. Documented as a stated simplification in the README, not hidden.
 
 **Q2 — Fixed or scaling weekly discount budget?**
-**Decision: scaling**, per the formula in Section 5. A fixed ₹50,000 figure breaks the moment dataset size changes — it'd look absurdly generous on a small synthetic set and absurdly stingy on a larger one. Tying it to 1.5% of open invoice value keeps the number meaningful regardless of dataset scale, with a floor/ceiling so demo output stays legible.
+**Decision: Scaling on eligible invoice value.**
+`weekly_budget = clamp(0.015 × total eligible invoice value, min=₹30,000, max=₹1,00,000)`.
+Tying it to 1.5% of eligible invoice value ensures scalability across varying portfolio sizes while keeping budget controlled. (Supersedes total open invoice value).
 
 **Q3 — Per-buyer discount frequency cap?**
-**Decision: yes, 1 offer per buyer per rolling 14 days.** Without this, the optimizer could re-offer the same buyer every week, which (a) looks unrealistic in a demo and (b) undermines the core pitch that this system is smarter than blanket discounting.
+**Decision: Maximum 1 offer per buyer per run, and at least 14 days since previous non-rejected offer.** Prevents offer spamming and keeps negotiation pacing realistic.
 
-These are now locked. If real project context later shows a decision was wrong (e.g. actual policy docs specify a different budget rule), update this file and flag the change to the other person before touching schema or optimizer code that depends on it.
+**Q4 — Buyer score formula update?**
+**Decision: 80/10/10 weighting (Reliability 80%, Financial 10%, Liquidity 10%).** Supersedes the previous 40/35/25 split to heavily prioritize proven payment behavior while factoring exposure and liquidity.
+
+**Q5 — Human approval thresholds?**
+**Decision: Lowered to `discount_amount > ₹1,000` OR `invoice_amount > ₹1,00,000`.** Protects margin on smaller high-rate discounts and monitors material invoice movements.
+
+**Q6 — Dispute feature policy?**
+**Decision: Exclude from ML features completely (`disputed`, `buyer_hist_dispute_rate`).** Prevents target leakage at invoice issuance; handled exclusively as a business eligibility gate.
+
+**Q7 — Currency unit consistency?**
+**Decision: ₹ in DB/runtime, ₹000 in ML CSVs.** Converted strictly at the model boundary.
