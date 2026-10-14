@@ -11,6 +11,7 @@ class Buyer(Base):
     primary_supplier_id = Column(String(50), ForeignKey("suppliers.supplier_id", ondelete="RESTRICT"), nullable=True, index=True)
     behavioural_segment = Column(String(100), nullable=True)
     tier = Column(String(20), nullable=True, index=True)  # 'A', 'B', 'C' or NULL
+    tier_basis = Column(String(30), nullable=True)
     credit_limit = Column(Numeric(14, 2), nullable=True, default=0.00)
     discount_responsiveness = Column(Float, nullable=True)
     blacklisted = Column(Boolean, default=False, nullable=False, index=True)

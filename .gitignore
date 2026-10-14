@@ -112,3 +112,5 @@ pgdata/
 data/*.csv
 data/raw/
 data/processed/
+
+source_data/

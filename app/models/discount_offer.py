@@ -12,6 +12,7 @@ class DiscountOffer(Base):
     buyer_id = Column(String(50), ForeignKey("buyers.buyer_id", ondelete="RESTRICT"), nullable=False, index=True)
     offer_date = Column(Date, nullable=False, index=True)
     deadline_date = Column(Date, nullable=False, index=True)
+    invoice_amount = Column(Numeric(14, 2), nullable=True)
     offered_rate_pct = Column(Numeric(6, 4), nullable=False)
     discount_amount = Column(Numeric(14, 2), nullable=False)
     net_payable_if_accepted = Column(Numeric(14, 2), nullable=False)
@@ -22,6 +23,8 @@ class DiscountOffer(Base):
     approved_at = Column(DateTime(timezone=True), nullable=True)
     requires_approval = Column(Boolean, default=False, nullable=False)
     recommendation_payload = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
+    data_origin = Column(String(100), nullable=True)
+    ml_use_allowed = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
 
