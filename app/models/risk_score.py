@@ -13,6 +13,7 @@ class RiskScore(Base):
     liquidity_risk = Column(Numeric(5, 2), nullable=False)
     overall_risk = Column(Numeric(5, 2), nullable=False)
     tier = Column(String(20), nullable=True, index=True)  # 'A', 'B', 'C' or NULL
+    tier_basis = Column(String(30), nullable=True)
     computed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     model_version = Column(String(50), default="v1.0", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

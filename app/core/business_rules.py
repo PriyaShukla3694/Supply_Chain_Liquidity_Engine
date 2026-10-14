@@ -10,10 +10,10 @@ DEFAULT_BUSINESS_RULES: Dict[str, Any] = {
         "excluded_buyer_statuses": ["blacklisted", "disputed"],
     },
     "tier_max_discounts": {
-        "Tier-A": 0.015,
-        "Tier-B": 0.01,
-        "Tier-C": 0.005,
-        "Tier-C_urgent_max": 0.01,
+        "A": 0.015,
+        "B": 0.01,
+        "C": 0.005,
+        "C_urgent_max": 0.01,
     },
     "human_approval_thresholds": {
         "max_discount_amount": 1000.0,
