@@ -69,9 +69,10 @@ def upsert_records(
     model: Any,
     records: List[Dict[str, Any]],
     conflict_target: Optional[List[str]] = None,
+    update_columns: Optional[List[str]] = None,
     batch_size: int = 500,
 ) -> int:
-    """Inserts records using ON CONFLICT DO NOTHING / insert or ignore.
+    """Inserts records using ON CONFLICT DO NOTHING or ON CONFLICT DO UPDATE.
 
     Returns the number of newly inserted rows.
     """
@@ -87,14 +88,28 @@ def upsert_records(
         if dialect_name == "postgresql":
             stmt = pg_insert(table).values(batch)
             if conflict_target:
-                stmt = stmt.on_conflict_do_nothing(index_elements=conflict_target)
+                if update_columns:
+                    set_clause = {col: stmt.excluded[col] for col in update_columns}
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=conflict_target,
+                        set_=set_clause,
+                    )
+                else:
+                    stmt = stmt.on_conflict_do_nothing(index_elements=conflict_target)
             else:
                 stmt = stmt.on_conflict_do_nothing()
             db.execute(stmt)
         elif dialect_name == "sqlite":
             stmt = sqlite_insert(table).values(batch)
             if conflict_target:
-                stmt = stmt.on_conflict_do_nothing(index_elements=conflict_target)
+                if update_columns:
+                    set_clause = {col: stmt.excluded[col] for col in update_columns}
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=conflict_target,
+                        set_=set_clause,
+                    )
+                else:
+                    stmt = stmt.on_conflict_do_nothing(index_elements=conflict_target)
             else:
                 stmt = stmt.on_conflict_do_nothing()
             db.execute(stmt)
@@ -176,6 +191,22 @@ def load_buyers(
                         "last_invoice_date": parse_date(row.get("last_invoice_date")),
                     }
                 )
+        update_cols = [
+            "country_code",
+            "primary_supplier_id",
+            "behavioural_segment",
+            "credit_limit",
+            "discount_responsiveness",
+            "first_invoice_date",
+            "last_invoice_date",
+        ]
+        return upsert_records(
+            db,
+            Buyer,
+            buyer_records,
+            conflict_target=["buyer_id"],
+            update_columns=update_cols,
+        )
     else:
         logger.warning(
             "Optional file '%s' not found. Deriving buyers from invoice data.",
@@ -221,7 +252,7 @@ def load_buyers(
                 }
             )
 
-    return upsert_records(db, Buyer, buyer_records, conflict_target=["buyer_id"])
+        return upsert_records(db, Buyer, buyer_records, conflict_target=["buyer_id"])
 
 
 def load_invoices(db: Session, invoice_rows: List[Dict[str, str]]) -> int:

@@ -232,3 +232,80 @@ def test_offers_keep_ml_use_allowed_false(sqlite_db_session, fixture_seed_dir):
     assert offer.ml_use_allowed is False
     assert offer.data_origin == "SIMULATED_DEMONSTRATION_OFFER_HISTORY"
     assert offer.recommendation_payload == {"test": True}
+
+
+@pytest.mark.unit
+def test_buyers_clean_upsert_enriches_derived_rows(sqlite_db_session, fixture_seed_dir):
+    """Test that:
+    1. Running loader without buyers_clean.csv derives buyers from invoices with credit_limit=None.
+    2. Running loader with small fixture buyers_clean.csv upserts and enriches credit_limit (= CSV * 1000).
+    3. A third run changes nothing and does not overwrite enriched data.
+    """
+    # 1. First run: without buyers_clean.csv
+    summary1 = load_all_seed_data(sqlite_db_session, fixture_seed_dir)
+    assert summary1["buyers"] == 2
+
+    buyer1 = sqlite_db_session.query(Buyer).filter_by(buyer_id="BUY-01").first()
+    assert buyer1 is not None
+    assert buyer1.credit_limit is None
+    assert buyer1.behavioural_segment is None
+
+    # 2. Second run: with small fixture buyers_clean.csv
+    buyers_clean_file = fixture_seed_dir / "buyers_clean.csv"
+    with buyers_clean_file.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "buyer_id",
+                "country_code",
+                "primary_supplier_id",
+                "behavioural_segment",
+                "credit_limit",
+                "discount_responsiveness",
+                "first_invoice_date",
+                "last_invoice_date",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "buyer_id": "BUY-01",
+                "country_code": "IN",
+                "primary_supplier_id": "SUP-01",
+                "behavioural_segment": "Segment_A",
+                "credit_limit": "250.50",  # CSV value in thousands -> 250500.00
+                "discount_responsiveness": "0.85",
+                "first_invoice_date": "2024-01-01",
+                "last_invoice_date": "2024-01-20",
+            }
+        )
+
+    summary2 = load_all_seed_data(sqlite_db_session, fixture_seed_dir)
+    assert summary2["buyers"] == 0  # Updated existing buyer, no new row inserted
+
+    sqlite_db_session.expire_all()
+    buyer1_updated = sqlite_db_session.query(Buyer).filter_by(buyer_id="BUY-01").first()
+    assert buyer1_updated is not None
+    assert buyer1_updated.credit_limit == Decimal("250500.00")
+    assert buyer1_updated.behavioural_segment == "Segment_A"
+    assert buyer1_updated.discount_responsiveness == 0.85
+
+    # 3. Third run: changes nothing
+    summary3 = load_all_seed_data(sqlite_db_session, fixture_seed_dir)
+    assert summary3["buyers"] == 0
+
+    sqlite_db_session.expire_all()
+    buyer1_third = sqlite_db_session.query(Buyer).filter_by(buyer_id="BUY-01").first()
+    assert buyer1_third.credit_limit == Decimal("250500.00")
+    assert buyer1_third.behavioural_segment == "Segment_A"
+    assert buyer1_third.discount_responsiveness == 0.85
+
+    # Also verify that if buyers_clean.csv is removed again, derived rows keep DO NOTHING and don't overwrite
+    buyers_clean_file.unlink()
+    summary4 = load_all_seed_data(sqlite_db_session, fixture_seed_dir)
+    assert summary4["buyers"] == 0
+
+    sqlite_db_session.expire_all()
+    buyer1_fourth = sqlite_db_session.query(Buyer).filter_by(buyer_id="BUY-01").first()
+    assert buyer1_fourth.credit_limit == Decimal("250500.00")
+    assert buyer1_fourth.behavioural_segment == "Segment_A"
