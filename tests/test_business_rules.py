@@ -29,6 +29,7 @@ def test_fallback_to_default_business_rules(db_session):
     rule = get_business_rule(db_session, "discount_eligibility")
     assert rule["min_invoice_amount"] == 50000.0
     assert rule["min_days_to_due"] == 10
+    assert rule["excluded_buyer_statuses"] == ["blacklisted"]
 
 
 @pytest.mark.unit

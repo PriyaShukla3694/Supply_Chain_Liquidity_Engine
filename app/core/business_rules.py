@@ -7,7 +7,7 @@ DEFAULT_BUSINESS_RULES: Dict[str, Any] = {
     "discount_eligibility": {
         "min_invoice_amount": 50000.0,
         "min_days_to_due": 10,
-        "excluded_buyer_statuses": ["blacklisted", "disputed"],
+        "excluded_buyer_statuses": ["blacklisted"],
     },
     "tier_max_discounts": {
         "A": 0.015,
