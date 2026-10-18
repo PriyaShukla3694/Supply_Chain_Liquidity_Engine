@@ -1,5 +1,12 @@
 import csv
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.core.currency import convert_source_invoice_amount
 
 
 SOURCE_FILE = Path("source_data/invoices_merged_clean.csv")
@@ -18,7 +25,11 @@ def recompute_discount_eligible(row):
     is_open = row["invoice_status"].strip().lower() == "open"
     enough_days = to_int(row["days_until_due"]) >= 10
     not_disputed = to_int(row["disputed"]) == 0
-    minimum_amount = to_float(row["invoice_amount_display"]) >= 50000
+    amount_inr = convert_source_invoice_amount(
+        row.get("invoice_amount"),
+        row.get("invoice_amount_display"),
+    )
+    minimum_amount = amount_inr >= 50000
 
     return int(
         is_open

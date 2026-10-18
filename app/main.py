@@ -1,19 +1,36 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.sql import text
+from fastapi.middleware.cors import CORSMiddleware
+from app.api.currency import router as currency_router
+from app.api.buyers import router as buyers_router
 
 from app.db.session import get_db
 from app.api.auth import router as auth_router
 from app.core.security import verify_password, get_password_hash
+from app.api.dashboard import router as dashboard_router
 
 app = FastAPI(
     title="AI-Driven Dynamic Discounting & Supply Chain Liquidity Engine API",
     description="Liquidity Engine API with Authentication & Role-Based Access Control",
     version="0.2.0",
 )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Include Authentication and RBAC endpoints
 app.include_router(auth_router)
+app.include_router(currency_router)
+app.include_router(dashboard_router)
+app.include_router(buyers_router)
 
 
 # --- Health Endpoints ---
