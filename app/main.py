@@ -14,6 +14,7 @@ from app.api.suppliers import router as suppliers_router
 from app.api.buyers import router as buyers_router
 from app.api.currency import router as currency_router
 from app.api.dashboard import router as dashboard_router
+from app.api.invoices import router as invoices_router
 from app.core.security import verify_password, get_password_hash
 
 app = FastAPI(
@@ -101,6 +102,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 app.include_router(auth_router)
 app.include_router(suppliers_router)
 app.include_router(buyers_router)
+app.include_router(invoices_router)
 app.include_router(currency_router)
 app.include_router(dashboard_router)
 
