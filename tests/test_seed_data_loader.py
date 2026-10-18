@@ -215,6 +215,7 @@ def test_fk_order_and_integrity(sqlite_db_session, fixture_seed_dir):
     for b in buyers:
         assert b.tier is None  # tier left NULL for now
         assert b.primary_supplier_id in ("SUP-01", "SUP-02")
+        assert b.disputed_flag is False
 
     offer = sqlite_db_session.query(DiscountOffer).filter_by(offer_id="OFF-0001").first()
     assert offer.invoice is not None
@@ -249,6 +250,7 @@ def test_buyers_clean_upsert_enriches_derived_rows(sqlite_db_session, fixture_se
     assert buyer1 is not None
     assert buyer1.credit_limit is None
     assert buyer1.behavioural_segment is None
+    assert buyer1.disputed_flag is False
 
     # 2. Second run: with small fixture buyers_clean.csv
     buyers_clean_file = fixture_seed_dir / "buyers_clean.csv"
@@ -289,6 +291,7 @@ def test_buyers_clean_upsert_enriches_derived_rows(sqlite_db_session, fixture_se
     assert buyer1_updated.credit_limit == Decimal("250500.00")
     assert buyer1_updated.behavioural_segment == "Segment_A"
     assert buyer1_updated.discount_responsiveness == 0.85
+    assert buyer1_updated.disputed_flag is False
 
     # 3. Third run: changes nothing
     summary3 = load_all_seed_data(sqlite_db_session, fixture_seed_dir)

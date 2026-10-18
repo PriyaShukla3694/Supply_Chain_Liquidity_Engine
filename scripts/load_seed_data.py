@@ -199,6 +199,7 @@ def load_buyers(
             "discount_responsiveness",
             "first_invoice_date",
             "last_invoice_date",
+            "disputed_flag",
         ]
         return upsert_records(
             db,
@@ -230,10 +231,6 @@ def load_buyers(
             last_inv = max(valid_dates) if valid_dates else None
 
             country = invs[0].get("country_code") or None
-            any_disputed = any(
-                str(inv.get("disputed", "0")).strip().lower() in ("1", "true")
-                for inv in invs
-            )
 
             buyer_records.append(
                 {
@@ -246,7 +243,7 @@ def load_buyers(
                     "credit_limit": None,
                     "discount_responsiveness": None,
                     "blacklisted": False,
-                    "disputed_flag": any_disputed,
+                    "disputed_flag": False,
                     "first_invoice_date": first_inv,
                     "last_invoice_date": last_inv,
                 }
