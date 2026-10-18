@@ -14,6 +14,7 @@ from app.api.suppliers import router as suppliers_router
 from app.api.buyers import router as buyers_router
 from app.api.currency import router as currency_router
 from app.api.dashboard import router as dashboard_router
+from app.core.security import verify_password, get_password_hash
 
 app = FastAPI(
     title="AI-Driven Dynamic Discounting & Supply Chain Liquidity Engine API",
