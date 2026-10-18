@@ -12,7 +12,8 @@ from app.db.session import get_db
 from app.api.auth import router as auth_router
 from app.api.suppliers import router as suppliers_router
 from app.api.buyers import router as buyers_router
-from app.core.security import verify_password, get_password_hash
+from app.api.currency import router as currency_router
+from app.api.dashboard import router as dashboard_router
 
 app = FastAPI(
     title="AI-Driven Dynamic Discounting & Supply Chain Liquidity Engine API",
@@ -99,6 +100,8 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 app.include_router(auth_router)
 app.include_router(suppliers_router)
 app.include_router(buyers_router)
+app.include_router(currency_router)
+app.include_router(dashboard_router)
 
 
 # --- Health Endpoints ---

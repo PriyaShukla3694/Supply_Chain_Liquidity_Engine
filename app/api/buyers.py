@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,6 +12,7 @@ from app.models.supplier import Supplier
 from app.models.user import User
 from app.schemas.buyer import BuyerCreate, BuyerDetailRead, BuyerRead, BuyerUpdate
 from app.schemas.common import PaginatedResponse, PaginationParams
+from app.services.buyer_scoring import preview_buyer_score
 
 router = APIRouter(prefix="/buyers", tags=["Buyers"])
 
@@ -119,6 +121,49 @@ def get_buyer(
     buyer_detail.invoice_count = invoice_count
     buyer_detail.open_exposure = open_exposure
     return buyer_detail
+
+
+@router.get(
+    "/{buyer_id}/score",
+    summary="Get Buyer Score Preview",
+    description="Calculates and returns a risk scoring and tier preview for a buyer.",
+)
+def get_buyer_score(
+    buyer_id: str,
+    as_of_date: Optional[date] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return a read-only buyer scoring preview."""
+    # Ensure buyer belongs to current user's company
+    buyer = (
+        db.query(Buyer)
+        .join(Supplier, Buyer.primary_supplier_id == Supplier.supplier_id)
+        .filter(
+            Buyer.buyer_id == buyer_id,
+            Supplier.company_id == current_user.company_id,
+        )
+        .first()
+    )
+    if not buyer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Buyer '{buyer_id}' not found",
+        )
+
+    try:
+        return preview_buyer_score(
+            db=db,
+            buyer_id=buyer_id,
+            as_of_date=as_of_date,
+        )
+    except ValueError as exc:
+        if str(exc).startswith("Buyer not found:"):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Buyer not found",
+            ) from exc
+        raise
 
 
 @router.post(
