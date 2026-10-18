@@ -1,3 +1,4 @@
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -16,17 +17,25 @@ from app.core.business_rules import (
 def db_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    TestingSessionLocal = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=engine,
+    )
     session = TestingSessionLocal()
+
     try:
         yield session
     finally:
         session.close()
+        engine.dispose()
 
 
 @pytest.mark.unit
 def test_fallback_to_default_business_rules(db_session):
     rule = get_business_rule(db_session, "discount_eligibility")
+
     assert rule["min_invoice_amount"] == 50000.0
     assert rule["min_days_to_due"] == 10
 
@@ -34,23 +43,35 @@ def test_fallback_to_default_business_rules(db_session):
 @pytest.mark.unit
 def test_seed_default_business_rules(db_session):
     seed_default_business_rules(db_session)
+
     rules_in_db = db_session.query(BusinessRule).all()
+
     assert len(rules_in_db) == len(DEFAULT_BUSINESS_RULES)
 
 
 @pytest.mark.unit
 def test_set_and_get_business_rule_override(db_session):
-    new_threshold = {"min_invoice_amount": 50000.0, "min_days_to_due": 7}
-    set_business_rule(db_session, "discount_eligibility", new_threshold, updated_by="admin")
+    new_threshold = {
+        "min_invoice_amount": 50000.0,
+        "min_days_to_due": 7,
+    }
+
+    set_business_rule(
+        db_session,
+        "discount_eligibility",
+        new_threshold,
+        updated_by="admin",
+    )
 
     updated_rule = get_business_rule(db_session, "discount_eligibility")
+
     assert updated_rule["min_invoice_amount"] == 50000.0
     assert updated_rule["min_days_to_due"] == 7
 
 
 @pytest.mark.unit
 def test_business_rules_financial_thresholds_in_inr():
-    """Verifies all business rules and financial thresholds are expressed in INR."""
+    """Verify financial thresholds are expressed in INR."""
     eligibility = DEFAULT_BUSINESS_RULES["discount_eligibility"]
     assert eligibility["min_invoice_amount"] == 50000.0
 
@@ -63,3 +84,17 @@ def test_business_rules_financial_thresholds_in_inr():
     assert budget["min_budget"] == 30000.0
     assert budget["max_budget"] == 100000.0
 
+
+@pytest.mark.unit
+def test_tier_max_discounts_keys_standardised():
+    discounts = DEFAULT_BUSINESS_RULES["tier_max_discounts"]
+
+    assert "A" in discounts
+    assert "B" in discounts
+    assert "C" in discounts
+    assert "C_urgent_max" in discounts
+
+    assert discounts["A"] == 0.015
+    assert discounts["B"] == 0.01
+    assert discounts["C"] == 0.005
+    assert discounts["C_urgent_max"] == 0.01
