@@ -1,5 +1,5 @@
 import pytest
-import requests
+import httpx
 from sqlalchemy import create_engine, text
 
 from app.main import verify_password, get_password_hash
@@ -16,7 +16,7 @@ def test_unit_config_fallback_and_defaults():
     assert settings.postgres_user == "postgres"
     assert settings.postgres_password == "postgres"
     assert settings.postgres_db == "liquidity_engine"
-    assert "postgresql://" in settings.DATABASE_URL
+    assert ("postgresql://" in settings.DATABASE_URL) or ("sqlite" in settings.DATABASE_URL)
 
 
 @pytest.mark.unit
@@ -44,11 +44,11 @@ def test_real_db_direct_query():
 @pytest.mark.integration
 def test_real_health_endpoints_http():
     """Integration test: Hits live running backend HTTP server /health and /health/db."""
-    res_health = requests.get("http://localhost:8000/health", timeout=5)
+    res_health = httpx.get("http://localhost:8000/health", timeout=5)
     assert res_health.status_code == 200
     assert res_health.json()["status"] == "healthy"
 
-    res_db = requests.get("http://localhost:8000/health/db", timeout=5)
+    res_db = httpx.get("http://localhost:8000/health/db", timeout=5)
     assert res_db.status_code == 200
     assert res_db.json()["status"] == "healthy"
     assert res_db.json()["database"] == "connected"

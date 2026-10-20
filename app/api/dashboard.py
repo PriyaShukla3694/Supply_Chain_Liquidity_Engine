@@ -7,6 +7,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user
+from app.core.business_rules import is_invoice_discount_eligible
+from app.core.currency import format_inr
 from app.models.user import User
 from app.models.invoice import Invoice
 from app.models.buyer import Buyer
@@ -32,14 +34,14 @@ def dashboard_summary(db: Session = Depends(get_db)):
     eligible_invoices = [
         invoice
         for invoice in eligible_query.all()
-        if (invoice.due_date - today).days >= 10
-        and not (
-            invoice.buyer
-            and (
-                invoice.buyer.blacklisted
-                or invoice.buyer.tier == "C"
-            )
-        )
+        if not (invoice.buyer and invoice.buyer.blacklisted)
+        and is_invoice_discount_eligible(
+            invoice_amount_inr=invoice.invoice_amount,
+            days_until_due=(invoice.due_date - today).days,
+            is_disputed=invoice.disputed,
+            invoice_status=invoice.invoice_status,
+            buyer_tier=invoice.buyer.tier if (invoice.buyer and invoice.buyer.tier) else "Tier-B",
+        )[0]
     ]
 
     eligible_value = sum(
@@ -114,14 +116,15 @@ def dashboard_invoices(
             eligibility_status = "Settled"
         elif invoice.disputed:
             eligibility_status = "Disputed"
-        elif (
-            invoice.invoice_amount < 50000
-            or days_until_due < 10
-            or (buyer and (buyer.blacklisted or buyer.tier == "C"))
-        ):
-            eligibility_status = "Ineligible"
         else:
-            eligibility_status = "Eligible"
+            eligible, _ = is_invoice_discount_eligible(
+                invoice_amount_inr=invoice.invoice_amount,
+                days_until_due=days_until_due,
+                is_disputed=invoice.disputed,
+                invoice_status=invoice.invoice_status,
+                buyer_tier=buyer.tier if (buyer and buyer.tier) else "Tier-B",
+            )
+            eligibility_status = "Eligible" if eligible and not (buyer and buyer.blacklisted) else "Ineligible"
 
         amount = Decimal(str(invoice.invoice_amount))
 
@@ -129,7 +132,7 @@ def dashboard_invoices(
             "invoice_id": invoice.invoice_id,
             "buyer_id": invoice.buyer_id,
             "invoice_amount": str(amount),
-            "formatted_amount": f"₹{amount:,.2f}",
+            "formatted_amount": format_inr(amount),
             "invoice_date": invoice.invoice_date.isoformat(),
             "due_date": invoice.due_date.isoformat(),
             "days_until_due": days_until_due,

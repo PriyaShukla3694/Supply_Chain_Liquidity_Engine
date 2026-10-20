@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { getBuyerScore, type BuyerScore } from "../api";
 
@@ -12,7 +12,7 @@ export default function BuyerDetails() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
 
-    async function loadScore(date: string) {
+    const loadScore = useCallback(async (date: string) => {
         const token = localStorage.getItem("access_token");
 
         if (!token || !buyerId) {
@@ -34,13 +34,15 @@ export default function BuyerDetails() {
         } finally {
             setLoading(false);
         }
-    }
+    }, [buyerId, navigate]);
 
     useEffect(() => {
-        if (buyerId) {
+        if (!buyerId) return;
+        const timer = setTimeout(() => {
             void loadScore("2015-04-15");
-        }
-    }, [buyerId]);
+        }, 0);
+        return () => clearTimeout(timer);
+    }, [buyerId, loadScore]);
 
     const metrics = [
         { label: "Reliability Score", value: score?.reliability_score },
