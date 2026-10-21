@@ -1,7 +1,7 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getBuyerScore, type BuyerScore } from "../api";
+import { ApiError, getBuyerScore, calculateAndPersistBuyerScore, type BuyerScore } from "../api";
 
 export default function BuyerDetails() {
     const { buyerId } = useParams<{ buyerId: string }>();
@@ -16,7 +16,6 @@ export default function BuyerDetails() {
         const token = localStorage.getItem("access_token");
 
         if (!token || !buyerId) {
-            navigate("/login", { replace: true });
             return;
         }
 
@@ -24,11 +23,14 @@ export default function BuyerDetails() {
         setError("");
 
         try {
-            const result = await getBuyerScore(token, buyerId, date);
+            const result = await calculateAndPersistBuyerScore(token, buyerId, date);
             setScore(result);
         } catch (err) {
+            if (err instanceof ApiError && err.status === 401) {
+                return;
+            }
             setError(
-                err instanceof Error ? err.message : "Unable to load buyer score."
+                err instanceof Error ? err.message : "Unable to calculate and persist buyer score."
             );
             setScore(null);
         } finally {
@@ -37,9 +39,43 @@ export default function BuyerDetails() {
     }
 
     useEffect(() => {
-        if (buyerId) {
-            void loadScore("2015-04-15");
+        let isCancelled = false;
+
+        async function initScore() {
+            const token = localStorage.getItem("access_token");
+            if (!token || !buyerId) return;
+
+            setLoading(true);
+            setError("");
+
+            try {
+                const result = await getBuyerScore(token, buyerId, "2015-04-15");
+                if (!isCancelled) {
+                    setScore(result);
+                }
+            } catch (err) {
+                if (isCancelled) return;
+                if (err instanceof ApiError && err.status === 401) {
+                    return;
+                }
+                setError(
+                    err instanceof Error ? err.message : "Unable to load buyer score."
+                );
+                setScore(null);
+            } finally {
+                if (!isCancelled) {
+                    setLoading(false);
+                }
+            }
         }
+
+        if (buyerId) {
+            void initScore();
+        }
+
+        return () => {
+            isCancelled = true;
+        };
     }, [buyerId]);
 
     const metrics = [
