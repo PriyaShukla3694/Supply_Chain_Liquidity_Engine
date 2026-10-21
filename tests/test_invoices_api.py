@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from app.core.clock import business_today
 
 from app.core.security import create_access_token, get_password_hash
 from app.db.session import Base, get_db
@@ -59,7 +60,7 @@ def invoices_api_setup():
     db.add_all([buyer1, buyer2, buyer_c2])
     db.commit()
 
-    today = date.today()
+    today = business_today()
 
     # Invoices for Company 1
     # 1. Open invoice (future due)
@@ -189,7 +190,7 @@ def test_invoices_role_permissions(invoices_api_setup):
     assert client.get("/invoices/summary", headers=analyst_headers).status_code == 200
 
     # Analyst cannot create, patch, or settle (403)
-    today = date.today()
+    today = business_today()
     create_payload = {
         "buyer_id": "BUY-01",
         "supplier_id": "SUP-01",
@@ -221,7 +222,7 @@ def test_invoices_role_permissions(invoices_api_setup):
 def test_invoices_computed_fields(invoices_api_setup):
     client = invoices_api_setup["client"]
     headers = {"Authorization": f"Bearer {invoices_api_setup['token_admin1']}"}
-    today = date.today()
+    today = business_today()
 
     # 1. Open future invoice (101: due today + 20 days)
     r1 = client.get("/invoices/101", headers=headers)
@@ -300,7 +301,7 @@ def test_invoices_pagination_and_filters(invoices_api_setup):
 def test_invoices_validation_errors(invoices_api_setup):
     client = invoices_api_setup["client"]
     headers = {"Authorization": f"Bearer {invoices_api_setup['token_admin1']}"}
-    today = date.today()
+    today = business_today()
 
     # 1. due_date < invoice_date
     bad_dates = {
@@ -369,7 +370,7 @@ def test_invoices_settle_logic_and_audit(invoices_api_setup):
     client = invoices_api_setup["client"]
     db = invoices_api_setup["db"]
     headers = {"Authorization": f"Bearer {invoices_api_setup['token_admin1']}"}
-    today = date.today()
+    today = business_today()
 
     # 1. Late settlement: Invoice 102 was due 10 days ago (today - 10)
     # Settling today means 10 days late!

@@ -1,3 +1,4 @@
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -31,6 +32,7 @@ services:
       - JWT_SECRET=supersecretjwtkeyforlocaldevelopmentonly12345
       - JWT_ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=30
+      - REFERENCE_DATE=${REFERENCE_DATE:-}
     depends_on:
       db:
         condition: service_healthy

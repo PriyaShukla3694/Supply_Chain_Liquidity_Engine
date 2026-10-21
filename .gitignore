@@ -114,3 +114,12 @@ data/raw/
 data/processed/
 
 source_data/
+# Local backups and database exports
+backups/
+frontend-backup/
+*.dump
+db_before_import.sql
+main_diff.txt
+
+# Frontend dependencies
+node_modules/
