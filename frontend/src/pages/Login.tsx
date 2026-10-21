@@ -1,8 +1,10 @@
 
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { login, getCurrentUser } from "../api";
 
 function Login() {
+    const navigate = useNavigate();
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
     const [showPassword, setShowPassword] = useState(false);
@@ -28,13 +30,15 @@ function Login() {
             localStorage.setItem("username", user.username);
             localStorage.setItem("role", user.role);
 
-            // Step 5: Redirect to dashboard
-            window.location.href = "/";
+            // Step 5: Notify auth state and navigate to dashboard
+            window.dispatchEvent(new CustomEvent("auth:login"));
+            navigate("/", { replace: true });
         } catch (err) {
             // Clear potentially stale authentication data
             localStorage.removeItem("access_token");
             localStorage.removeItem("username");
             localStorage.removeItem("role");
+            window.dispatchEvent(new CustomEvent("auth:logout"));
 
             setError(
                 err instanceof Error ? err.message : "Login failed"

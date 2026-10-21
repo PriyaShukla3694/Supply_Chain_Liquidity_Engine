@@ -1,12 +1,37 @@
 
+import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Buyers from "./pages/Buyers";
 import BuyerDetails from "./pages/BuyerDetails";
+import InvoiceIntelligence from "./pages/InvoiceIntelligence";
 
 function App() {
-  const isLoggedIn = Boolean(localStorage.getItem("access_token"));
+  const [token, setToken] = useState<string | null>(() =>
+    localStorage.getItem("access_token")
+  );
+
+  useEffect(() => {
+    const syncAuth = () => {
+      const currentToken = localStorage.getItem("access_token");
+      setToken((prev) => (prev !== currentToken ? currentToken : prev));
+    };
+
+    window.addEventListener("auth:login", syncAuth);
+    window.addEventListener("auth:logout", syncAuth);
+    window.addEventListener("auth:unauthorized", syncAuth);
+    window.addEventListener("storage", syncAuth);
+
+    return () => {
+      window.removeEventListener("auth:login", syncAuth);
+      window.removeEventListener("auth:logout", syncAuth);
+      window.removeEventListener("auth:unauthorized", syncAuth);
+      window.removeEventListener("storage", syncAuth);
+    };
+  }, []);
+
+  const isLoggedIn = Boolean(token);
 
   return (
     <BrowserRouter>
@@ -41,6 +66,16 @@ function App() {
           element={
             isLoggedIn ? (
               <Buyers />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+        <Route
+          path="/invoices"
+          element={
+            isLoggedIn ? (
+              <InvoiceIntelligence />
             ) : (
               <Navigate to="/login" replace />
             )
