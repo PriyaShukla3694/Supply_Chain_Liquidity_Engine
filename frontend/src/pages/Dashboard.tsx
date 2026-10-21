@@ -19,6 +19,8 @@ import {
     Search,
     Settings,
     ShieldAlert,
+
+    TrendingUp,
     Users,
     Wallet,
     X,
@@ -39,7 +41,12 @@ import {
 
 const navigation = [
     { label: "Dashboard", icon: LayoutDashboard, path: "/" },
+    { label: "Invoices", icon: FileText, path: "/invoices" },
     { label: "Buyers", icon: Users, path: "/buyers" },
+    { label: "Risk Analysis", icon: ShieldAlert, path: "/risk" },
+    { label: "Forecast", icon: TrendingUp, path: "/forecast" },
+    { label: "Discounts", icon: BadgePercent, path: "/discounts" },
+    { label: "AI Assistant", icon: Bot, path: "/assistant" },
 ];
 
 const chartValues = [
