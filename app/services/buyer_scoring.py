@@ -4,8 +4,10 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
+from app.core.clock import business_today
 from app.models.invoice import Invoice
 from app.models.buyer import Buyer
+from app.models.risk_score import RiskScore
 
 
 def _clamp_score(score: float) -> float:
@@ -211,7 +213,8 @@ def preview_buyer_score(
     if buyer is None:
         raise ValueError(f"Buyer not found: {buyer_id}")
 
-    as_of_date = as_of_date or date.today()
+    # Use configured historical business date when no date is provided.
+    as_of_date = as_of_date or business_today()
 
     metrics = calculate_buyer_payment_metrics(db, buyer_id)
 
@@ -315,3 +318,66 @@ def preview_buyer_score(
     })
 
     return result
+
+
+def calculate_and_persist_buyer_score(
+    db: Session,
+    buyer_id: str,
+    as_of_date: date | None = None,
+    model_version: str = "v1.0",
+    commit: bool = True,
+) -> dict:
+    """
+    Calculate buyer score and persist the tier and tier_basis to the Buyer record,
+    and append a record to the RiskScore ledger when scoring is computed.
+
+    Preserves preview_buyer_score calculation formulas.
+    """
+    score_result = preview_buyer_score(
+        db=db,
+        buyer_id=buyer_id,
+        as_of_date=as_of_date,
+    )
+
+    buyer = (
+        db.query(Buyer)
+        .filter(Buyer.buyer_id == buyer_id)
+        .first()
+    )
+    if buyer is None:
+        raise ValueError(f"Buyer not found: {buyer_id}")
+
+    buyer.tier = score_result.get("tier")
+    buyer.tier_basis = score_result.get("tier_basis")
+
+    # Only insert into risk_scores if we have complete numeric scores,
+    # because these columns are NOT NULL with range constraints 0-100.
+    risk_score_record = None
+    if score_result.get("status") == "calculated":
+        risk_score_record = RiskScore(
+            buyer_id=buyer_id,
+            payment_reliability=Decimal(
+                str(score_result["reliability_score"])
+            ),
+            financial_risk=Decimal(
+                str(score_result["financial_score"])
+            ),
+            liquidity_risk=Decimal(
+                str(score_result["liquidity_score"])
+            ),
+            overall_risk=Decimal(
+                str(score_result["overall_score"])
+            ),
+            tier=score_result.get("tier"),
+            tier_basis=score_result.get("tier_basis"),
+            model_version=model_version,
+        )
+        db.add(risk_score_record)
+
+    if commit:
+        db.commit()
+        db.refresh(buyer)
+        if risk_score_record:
+            db.refresh(risk_score_record)
+
+    return score_result

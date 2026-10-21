@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user
+from app.core.clock import business_today
 from app.models.user import User
 from app.models.invoice import Invoice
 from app.models.buyer import Buyer
@@ -20,7 +21,7 @@ router = APIRouter(
 
 @router.get("/summary")
 def dashboard_summary(db: Session = Depends(get_db)):
-    today = date.today()
+    today = business_today()
 
     eligible_query = db.query(Invoice).filter(
         Invoice.invoice_status == "open",
@@ -43,7 +44,10 @@ def dashboard_summary(db: Session = Depends(get_db)):
     ]
 
     eligible_value = sum(
-        (Decimal(str(invoice.invoice_amount)) for invoice in eligible_invoices),
+        (
+            Decimal(str(invoice.invoice_amount))
+            for invoice in eligible_invoices
+        ),
         Decimal("0.00"),
     )
 
@@ -65,7 +69,13 @@ def dashboard_summary(db: Session = Depends(get_db)):
     }
 
     budget = (
-        min(max(eligible_value * Decimal("0.015"), Decimal("30000")), Decimal("100000"))
+        min(
+            max(
+                eligible_value * Decimal("0.015"),
+                Decimal("30000"),
+            ),
+            Decimal("100000"),
+        )
         if eligible_value > 0
         else Decimal("0.00")
     )
@@ -73,16 +83,21 @@ def dashboard_summary(db: Session = Depends(get_db)):
     return {
         "eligible_invoice_value": str(eligible_value),
         "eligible_invoice_count": len(eligible_invoices),
-        "historical_late_rate": round(
-            late_count / settled_count * 100, 2
-        ) if settled_count else 0.0,
+        "historical_late_rate": (
+            round(late_count / settled_count * 100, 2)
+            if settled_count
+            else 0.0
+        ),
         "weekly_discount_budget": str(budget),
         "total_buyers": total_buyers,
         "buyer_tiers": {
             tier: {
                 "count": count,
-                "percentage": round(count / total_buyers * 100, 2)
-                if total_buyers else 0.0,
+                "percentage": (
+                    round(count / total_buyers * 100, 2)
+                    if total_buyers
+                    else 0.0
+                ),
             }
             for tier, count in tier_counts.items()
         },
@@ -95,7 +110,7 @@ def dashboard_invoices(
     limit: int = Query(default=10, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    today = date.today()
+    today = business_today()
 
     invoices = (
         db.query(Invoice)
@@ -117,7 +132,10 @@ def dashboard_invoices(
         elif (
             invoice.invoice_amount < 50000
             or days_until_due < 10
-            or (buyer and (buyer.blacklisted or buyer.tier == "C"))
+            or (
+                buyer
+                and (buyer.blacklisted or buyer.tier == "C")
+            )
         ):
             eligibility_status = "Ineligible"
         else:
