@@ -10,11 +10,5 @@ bcrypt==4.0.1
 python-multipart==0.0.9
 alembic
 pgvector
-pandas
-numpy
-scikit-learn
-xgboost
-joblib
 pytest
 httpx
-requests

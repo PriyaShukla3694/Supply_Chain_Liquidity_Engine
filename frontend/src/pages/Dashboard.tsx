@@ -19,7 +19,6 @@ import {
     Search,
     Settings,
     ShieldAlert,
-    TrendingUp,
     Users,
     Wallet,
     X,
@@ -40,12 +39,7 @@ import {
 
 const navigation = [
     { label: "Dashboard", icon: LayoutDashboard, path: "/" },
-    { label: "Invoices", icon: FileText, path: "/invoices" },
     { label: "Buyers", icon: Users, path: "/buyers" },
-    { label: "Risk Analysis", icon: ShieldAlert, path: "/risk" },
-    { label: "Forecast", icon: TrendingUp, path: "/forecast" },
-    { label: "Discounts", icon: BadgePercent, path: "/discounts" },
-    { label: "AI Assistant", icon: Bot, path: "/assistant" },
 ];
 
 const chartValues = [
@@ -263,57 +257,12 @@ export default function Dashboard() {
     }, []);
 
     useEffect(() => {
-        let isCancelled = false;
+        const timer = window.setTimeout(() => {
+            void loadDashboard();
+        }, 0);
 
-        async function init() {
-            const token = localStorage.getItem("access_token");
-            if (!token) {
-                return;
-            }
-
-            setLoading(true);
-            setError("");
-
-            try {
-                const [summaryData, invoiceData, userData] = await Promise.all([
-                    getDashboardSummary(token),
-                    getDashboardInvoices(token, 10),
-                    getCurrentUser(token),
-                ]);
-
-                if (!isCancelled) {
-                    setSummary(summaryData);
-                    setInvoices(invoiceData);
-                    setProfile(userData);
-
-                    localStorage.setItem("username", userData.username);
-                    localStorage.setItem("role", userData.role);
-                }
-            } catch (err) {
-                if (isCancelled) return;
-                if (err instanceof ApiError && err.status === 401) {
-                    return;
-                }
-
-                const message =
-                    err instanceof Error
-                        ? err.message
-                        : "Unable to load dashboard data.";
-
-                setError(message);
-            } finally {
-                if (!isCancelled) {
-                    setLoading(false);
-                }
-            }
-        }
-
-        void init();
-
-        return () => {
-            isCancelled = true;
-        };
-    }, []);
+        return () => window.clearTimeout(timer);
+    }, [loadDashboard]);
 
     function handleLogout() {
         setProfileOpen(false);
