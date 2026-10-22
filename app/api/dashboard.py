@@ -1,15 +1,12 @@
-
-from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user
+from app.core.clock import business_today
 from app.core.business_rules import is_invoice_discount_eligible
 from app.core.currency import format_inr
-from app.models.user import User
 from app.models.invoice import Invoice
 from app.models.buyer import Buyer
 
@@ -22,7 +19,7 @@ router = APIRouter(
 
 @router.get("/summary")
 def dashboard_summary(db: Session = Depends(get_db)):
-    today = date.today()
+    today = business_today()
 
     eligible_query = db.query(Invoice).filter(
         Invoice.invoice_status == "open",
@@ -34,18 +31,32 @@ def dashboard_summary(db: Session = Depends(get_db)):
     eligible_invoices = [
         invoice
         for invoice in eligible_query.all()
-        if not (invoice.buyer and invoice.buyer.blacklisted)
+        if (invoice.due_date - today).days >= 10
+        and not (
+            invoice.buyer
+            and (
+                invoice.buyer.blacklisted
+                or invoice.buyer.tier == "C"
+            )
+        )
         and is_invoice_discount_eligible(
             invoice_amount_inr=invoice.invoice_amount,
             days_until_due=(invoice.due_date - today).days,
             is_disputed=invoice.disputed,
             invoice_status=invoice.invoice_status,
-            buyer_tier=invoice.buyer.tier if (invoice.buyer and invoice.buyer.tier) else "Tier-B",
+            buyer_tier=(
+                invoice.buyer.tier
+                if invoice.buyer and invoice.buyer.tier
+                else "Tier-B"
+            ),
         )[0]
     ]
 
     eligible_value = sum(
-        (Decimal(str(invoice.invoice_amount)) for invoice in eligible_invoices),
+        (
+            Decimal(str(invoice.invoice_amount))
+            for invoice in eligible_invoices
+        ),
         Decimal("0.00"),
     )
 
@@ -67,7 +78,13 @@ def dashboard_summary(db: Session = Depends(get_db)):
     }
 
     budget = (
-        min(max(eligible_value * Decimal("0.015"), Decimal("30000")), Decimal("100000"))
+        min(
+            max(
+                eligible_value * Decimal("0.015"),
+                Decimal("30000"),
+            ),
+            Decimal("100000"),
+        )
         if eligible_value > 0
         else Decimal("0.00")
     )
@@ -75,16 +92,21 @@ def dashboard_summary(db: Session = Depends(get_db)):
     return {
         "eligible_invoice_value": str(eligible_value),
         "eligible_invoice_count": len(eligible_invoices),
-        "historical_late_rate": round(
-            late_count / settled_count * 100, 2
-        ) if settled_count else 0.0,
+        "historical_late_rate": (
+            round(late_count / settled_count * 100, 2)
+            if settled_count
+            else 0.0
+        ),
         "weekly_discount_budget": str(budget),
         "total_buyers": total_buyers,
         "buyer_tiers": {
             tier: {
                 "count": count,
-                "percentage": round(count / total_buyers * 100, 2)
-                if total_buyers else 0.0,
+                "percentage": (
+                    round(count / total_buyers * 100, 2)
+                    if total_buyers
+                    else 0.0
+                ),
             }
             for tier, count in tier_counts.items()
         },
@@ -97,7 +119,7 @@ def dashboard_invoices(
     limit: int = Query(default=10, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    today = date.today()
+    today = business_today()
 
     invoices = (
         db.query(Invoice)
@@ -116,30 +138,47 @@ def dashboard_invoices(
             eligibility_status = "Settled"
         elif invoice.disputed:
             eligibility_status = "Disputed"
+        elif (
+            invoice.invoice_amount < 50000
+            or days_until_due < 10
+            or (
+                buyer
+                and (buyer.blacklisted or buyer.tier == "C")
+            )
+        ):
+            eligibility_status = "Ineligible"
         else:
             eligible, _ = is_invoice_discount_eligible(
                 invoice_amount_inr=invoice.invoice_amount,
                 days_until_due=days_until_due,
                 is_disputed=invoice.disputed,
                 invoice_status=invoice.invoice_status,
-                buyer_tier=buyer.tier if (buyer and buyer.tier) else "Tier-B",
+                buyer_tier=(
+                    buyer.tier if buyer and buyer.tier else "Tier-B"
+                ),
             )
-            eligibility_status = "Eligible" if eligible and not (buyer and buyer.blacklisted) else "Ineligible"
+            eligibility_status = (
+                "Eligible"
+                if eligible and not (buyer and buyer.blacklisted)
+                else "Ineligible"
+            )
 
         amount = Decimal(str(invoice.invoice_amount))
 
-        results.append({
-            "invoice_id": invoice.invoice_id,
-            "buyer_id": invoice.buyer_id,
-            "invoice_amount": str(amount),
-            "formatted_amount": format_inr(amount),
-            "invoice_date": invoice.invoice_date.isoformat(),
-            "due_date": invoice.due_date.isoformat(),
-            "days_until_due": days_until_due,
-            "tier": buyer.tier if buyer else None,
-            "invoice_status": invoice.invoice_status,
-            "disputed": invoice.disputed,
-            "eligibility_status": eligibility_status,
-        })
+        results.append(
+            {
+                "invoice_id": invoice.invoice_id,
+                "buyer_id": invoice.buyer_id,
+                "invoice_amount": str(amount),
+                "formatted_amount": format_inr(amount),
+                "invoice_date": invoice.invoice_date.isoformat(),
+                "due_date": invoice.due_date.isoformat(),
+                "days_until_due": days_until_due,
+                "tier": buyer.tier if buyer else None,
+                "invoice_status": invoice.invoice_status,
+                "disputed": invoice.disputed,
+                "eligibility_status": eligibility_status,
+            }
+        )
 
     return results

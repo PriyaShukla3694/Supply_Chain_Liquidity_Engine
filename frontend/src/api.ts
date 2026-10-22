@@ -45,12 +45,80 @@ export interface DashboardInvoice {
     eligibility_status: string;
 }
 
+export class ApiError extends Error {
+    status: number;
+    detail?: string;
+
+    constructor(status: number, message: string, detail?: string) {
+        super(message);
+        this.name = "ApiError";
+        this.status = status;
+        this.detail = detail;
+    }
+}
+
+export function logout(): void {
+    const hadAuth = Boolean(
+        localStorage.getItem("access_token") ||
+        localStorage.getItem("username") ||
+        localStorage.getItem("role")
+    );
+
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("username");
+    localStorage.removeItem("role");
+    localStorage.removeItem("token");
+    localStorage.removeItem("user_profile");
+
+    if (hadAuth) {
+        window.dispatchEvent(new CustomEvent("auth:logout"));
+    }
+}
+
+export function handleUnauthorized(): void {
+    if (!localStorage.getItem("access_token")) {
+        return;
+    }
+
+    logout();
+}
+
 async function getErrorMessage(
     response: Response,
     fallback: string
 ): Promise<string> {
     const error = await response.json().catch(() => null);
     return error?.detail || fallback;
+}
+
+export async function authFetch(
+    url: string,
+    token: string,
+    init?: RequestInit
+): Promise<Response> {
+    const headers = new Headers(init?.headers);
+
+    if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+    }
+
+    const response = await fetch(url, {
+        ...init,
+        headers,
+    });
+
+    if (response.status === 401) {
+        handleUnauthorized();
+
+        const detail = await getErrorMessage(
+            response,
+            "Session expired. Please log in again."
+        );
+
+        throw new ApiError(401, detail, detail);
+    }
+
+    return response;
 }
 
 export async function login(
@@ -71,9 +139,8 @@ export async function login(
     });
 
     if (!response.ok) {
-        throw new Error(
-            await getErrorMessage(response, "Login failed")
-        );
+        const errorMsg = await getErrorMessage(response, "Login failed");
+        throw new ApiError(response.status, errorMsg, errorMsg);
     }
 
     return response.json();
@@ -82,19 +149,14 @@ export async function login(
 export async function getCurrentUser(
     token: string
 ): Promise<UserProfile> {
-    const response = await fetch(`${API_BASE_URL}/users/me`, {
-        headers: {
-            Authorization: `Bearer ${token}`,
-        },
-    });
+    const response = await authFetch(`${API_BASE_URL}/users/me`, token);
 
     if (!response.ok) {
-        throw new Error(
-            await getErrorMessage(
-                response,
-                "Unable to fetch current user"
-            )
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to fetch current user"
         );
+        throw new ApiError(response.status, errorMsg, errorMsg);
     }
 
     return response.json();
@@ -103,21 +165,17 @@ export async function getCurrentUser(
 export async function getDashboardSummary(
     token: string
 ): Promise<DashboardSummary> {
-    const response = await fetch(`${API_BASE_URL}/dashboard/summary`, {
-        headers: {
-            Authorization: `Bearer ${token}`,
-        },
-    });
+    const response = await authFetch(
+        `${API_BASE_URL}/dashboard/summary`,
+        token
+    );
 
     if (!response.ok) {
-        throw new Error(
-            await getErrorMessage(
-                response,
-                response.status === 401
-                    ? "Session expired. Please log in again."
-                    : "Unable to load dashboard summary."
-            )
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to load dashboard summary."
         );
+        throw new ApiError(response.status, errorMsg, errorMsg);
     }
 
     return response.json();
@@ -127,35 +185,20 @@ export async function getDashboardInvoices(
     token: string,
     limit = 10
 ): Promise<DashboardInvoice[]> {
-    const response = await fetch(
+    const response = await authFetch(
         `${API_BASE_URL}/dashboard/invoices?limit=${limit}`,
-        {
-            headers: {
-                Authorization: `Bearer ${token}`,
-            },
-        }
+        token
     );
 
     if (!response.ok) {
-        throw new Error(
-            await getErrorMessage(
-                response,
-                response.status === 401
-                    ? "Session expired. Please log in again."
-                    : "Unable to load invoices."
-            )
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to load invoices."
         );
+        throw new ApiError(response.status, errorMsg, errorMsg);
     }
 
     return response.json();
-}
-
-export function logout(): void {
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("username");
-    localStorage.removeItem("role");
-    localStorage.removeItem("token");
-    localStorage.removeItem("user_profile");
 }
 
 export interface BuyerScore {
@@ -189,24 +232,270 @@ export async function getBuyerScore(
         ? `?as_of_date=${encodeURIComponent(asOfDate)}`
         : "";
 
-    const response = await fetch(
+    const response = await authFetch(
         `${API_BASE_URL}/buyers/${encodeURIComponent(buyerId)}/score${params}`,
+        token
+    );
+
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to load buyer score."
+        );
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+
+    return response.json();
+}
+
+export async function calculateAndPersistBuyerScore(
+    token: string,
+    buyerId: string,
+    asOfDate?: string
+): Promise<BuyerScore> {
+    const params = asOfDate
+        ? `?as_of_date=${encodeURIComponent(asOfDate)}`
+        : "";
+
+    const response = await authFetch(
+        `${API_BASE_URL}/buyers/${encodeURIComponent(buyerId)}/score${params}`,
+        token,
         {
-            headers: {
-                Authorization: `Bearer ${token}`,
-            },
+            method: "POST",
         }
     );
 
     if (!response.ok) {
-        throw new Error(
-            await getErrorMessage(
-                response,
-                response.status === 401
-                    ? "Session expired. Please log in again."
-                    : "Unable to load buyer score."
-            )
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to calculate and persist buyer score."
         );
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+
+    return response.json();
+}
+
+export interface BuyerItem {
+    buyer_id: string;
+    tier?: string | null;
+    credit_limit?: number | string | null;
+    primary_supplier_id?: string;
+    behavioural_segment?: string | null;
+    blacklisted?: boolean;
+}
+
+export interface BuyersPage {
+    items: BuyerItem[];
+    total: number;
+    page: number;
+    page_size: number;
+}
+
+export async function getBuyers(
+    token: string,
+    page = 1,
+    pageSize = 20
+): Promise<BuyersPage> {
+    const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(pageSize),
+    });
+
+    const response = await authFetch(
+        `${API_BASE_URL}/buyers?${params.toString()}`,
+        token
+    );
+
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            response.status === 404
+                ? "Buyers list API abhi backend mein available nahi hai."
+                : `Buyers load nahi hue (${response.status}).`
+        );
+
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+
+    const data = await response.json();
+
+    if (!Array.isArray(data) && Array.isArray(data.items)) {
+        return {
+            items: data.items,
+            total: Number(data.total ?? data.items.length),
+            page: Number(data.page ?? page),
+            page_size: Number(data.page_size ?? pageSize),
+        };
+    }
+
+    if (Array.isArray(data)) {
+        return {
+            items: data,
+            total: data.length,
+            page: 1,
+            page_size: data.length || pageSize,
+        };
+    }
+
+    throw new Error("Backend se buyers list ka format unexpected hai.");
+}
+
+export interface Invoice {
+    invoice_id: number;
+    buyer_id: string;
+    supplier_id: string;
+    invoice_date: string;
+    due_date: string;
+    payment_terms_days: number;
+    invoice_amount: number | string;
+    currency: string;
+    disputed: boolean;
+    invoice_status: string;
+    settled_date: string | null;
+    days_late: number | null;
+    is_late: boolean | null;
+    days_until_due: number | null;
+    overdue_days: number;
+    created_at: string | null;
+    updated_at: string | null;
+}
+
+export interface InvoiceMetric {
+    count: number;
+    total_amount: number | string;
+}
+
+export interface InvoiceSummary {
+    open: InvoiceMetric;
+    overdue: InvoiceMetric;
+    settled: InvoiceMetric;
+    disputed: InvoiceMetric;
+    open_count: number;
+    open_total: number | string;
+    overdue_count: number;
+    overdue_total: number | string;
+    settled_count: number;
+    settled_total: number | string;
+    disputed_count: number;
+    disputed_total: number | string;
+}
+
+export interface InvoiceBuyer {
+    buyer_id: string;
+    country_code: string | null;
+    tier: string | null;
+    credit_limit: number | string | null;
+    blacklisted: boolean | null;
+}
+
+export interface InvoicePayment {
+    payment_id: number;
+    invoice_id: number;
+    payment_date: string;
+    payment_amount: number | string;
+    payment_method: string | null;
+    reference_number: string | null;
+    status: string;
+    discount_applied: number | string;
+    created_at: string | null;
+}
+
+export interface InvoiceDetail extends Invoice {
+    buyer: InvoiceBuyer | null;
+    payments: InvoicePayment[];
+}
+
+export interface InvoicesPage {
+    items: Invoice[];
+    total: number;
+    page: number;
+    page_size: number;
+}
+
+export interface InvoiceFilters {
+    buyer_id?: string;
+    supplier_id?: string;
+    invoice_status?: "open" | "settled";
+    is_late?: boolean;
+    disputed?: boolean;
+    invoice_date_from?: string;
+    invoice_date_to?: string;
+    due_date_from?: string;
+    due_date_to?: string;
+    min_amount?: number;
+    max_amount?: number;
+    sort_by?: "invoice_date" | "due_date" | "invoice_amount";
+    order?: "asc" | "desc";
+}
+
+export async function getInvoicesSummary(
+    token: string
+): Promise<InvoiceSummary> {
+    const response = await authFetch(
+        `${API_BASE_URL}/invoices/summary`,
+        token
+    );
+
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to load invoice summary."
+        );
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+
+    return response.json();
+}
+
+export async function getInvoices(
+    token: string,
+    page = 1,
+    pageSize = 20,
+    filters: InvoiceFilters = {}
+): Promise<InvoicesPage> {
+    const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(pageSize),
+    });
+
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== "") {
+            params.set(key, String(value));
+        }
+    });
+
+    const response = await authFetch(
+        `${API_BASE_URL}/invoices?${params.toString()}`,
+        token
+    );
+
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to load invoices."
+        );
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+
+    return response.json();
+}
+
+export async function getInvoiceDetail(
+    token: string,
+    invoiceId: number
+): Promise<InvoiceDetail> {
+    const response = await authFetch(
+        `${API_BASE_URL}/invoices/${encodeURIComponent(invoiceId)}`,
+        token
+    );
+
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to load invoice details."
+        );
+        throw new ApiError(response.status, errorMsg, errorMsg);
     }
 
     return response.json();

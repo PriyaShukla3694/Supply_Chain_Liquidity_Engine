@@ -1,15 +1,25 @@
+
+from datetime import date
 from typing import Optional
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        env_ignore_empty=True,
+    )
 
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
     postgres_db: str = "liquidity_engine"
     database_url: Optional[str] = None
+
+    # Historical business date for the dataset
+    REFERENCE_DATE: Optional[date] = None
 
     JWT_SECRET: str = "supersecretjwtkeyforlocaldevelopmentonly12345"
     JWT_ALGORITHM: str = "HS256"
@@ -19,7 +29,11 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        return [
+            origin.strip()
+            for origin in self.CORS_ORIGINS.split(",")
+            if origin.strip()
+        ]
 
     @model_validator(mode="after")
     def assemble_db_connection(self) -> "Settings":

@@ -1,7 +1,10 @@
-
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getBuyerScore, type BuyerScore } from "../api";
+import {
+    ApiError,
+    getBuyerScore,
+    type BuyerScore,
+} from "../api";
 
 export default function BuyerDetails() {
     const { buyerId } = useParams<{ buyerId: string }>();
@@ -12,37 +15,56 @@ export default function BuyerDetails() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
 
-    const loadScore = useCallback(async (date: string) => {
-        const token = localStorage.getItem("access_token");
+    const loadScore = useCallback(
+        async (date: string) => {
+            const token = localStorage.getItem("access_token");
 
-        if (!token || !buyerId) {
-            navigate("/login", { replace: true });
-            return;
-        }
+            if (!token || !buyerId || !date) {
+                return;
+            }
 
-        setLoading(true);
-        setError("");
+            setLoading(true);
+            setError("");
 
-        try {
-            const result = await getBuyerScore(token, buyerId, date);
-            setScore(result);
-        } catch (err) {
-            setError(
-                err instanceof Error ? err.message : "Unable to load buyer score."
-            );
-            setScore(null);
-        } finally {
-            setLoading(false);
-        }
-    }, [buyerId, navigate]);
+            try {
+                const result = await getBuyerScore(
+                    token,
+                    buyerId,
+                    date
+                );
+
+                setScore(result);
+            } catch (err) {
+                if (err instanceof ApiError && err.status === 401) {
+                    setScore(null);
+                    setError("Your session has expired. Please log in again.");
+                    return;
+                }
+
+                setError(
+                    err instanceof Error
+                        ? err.message
+                        : "Unable to load buyer score preview."
+                );
+                setScore(null);
+            } finally {
+                setLoading(false);
+            }
+        },
+        [buyerId]
+    );
+
 
     useEffect(() => {
         if (!buyerId) return;
-        const timer = setTimeout(() => {
-            void loadScore("2015-04-15");
+
+        const timer = window.setTimeout(() => {
+            void loadScore(asOfDate);
         }, 0);
-        return () => clearTimeout(timer);
-    }, [buyerId, loadScore]);
+
+        return () => window.clearTimeout(timer);
+    }, [buyerId, asOfDate, loadScore]);
+
 
     const metrics = [
         { label: "Reliability Score", value: score?.reliability_score },
@@ -65,9 +87,13 @@ export default function BuyerDetails() {
                     Finance Intelligence
                 </p>
 
-                <h1 className="mt-3 text-3xl font-bold">Buyer Score Details</h1>
+                <h1 className="mt-3 text-3xl font-bold">
+                    Buyer Score Details
+                </h1>
+
                 <p className="mt-2 text-slate-400">
-                    Buyer ID: <span className="text-blue-300">{buyerId}</span>
+                    Buyer ID:{" "}
+                    <span className="text-blue-300">{buyerId}</span>
                 </p>
 
                 <section className="mt-8 rounded-2xl border border-slate-800 bg-slate-900 p-6">
@@ -79,11 +105,14 @@ export default function BuyerDetails() {
                             >
                                 Calculate score as of
                             </label>
+
                             <input
                                 id="as-of-date"
                                 type="date"
                                 value={asOfDate}
-                                onChange={(event) => setAsOfDate(event.target.value)}
+                                onChange={(event) =>
+                                    setAsOfDate(event.target.value)
+                                }
                                 className="rounded-lg border border-slate-700 bg-slate-950 px-4 py-3"
                             />
                         </div>
@@ -93,12 +122,14 @@ export default function BuyerDetails() {
                             disabled={loading || !asOfDate}
                             className="rounded-lg bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500 disabled:opacity-50"
                         >
-                            {loading ? "Calculating..." : "Calculate Score"}
+                            {loading ? "Loading..." : "Calculate Score"}
                         </button>
                     </div>
 
                     {loading && (
-                        <p className="mt-6 text-slate-400">Loading score preview...</p>
+                        <p className="mt-6 text-slate-400">
+                            Loading score preview...
+                        </p>
                     )}
 
                     {error && (
@@ -115,45 +146,64 @@ export default function BuyerDetails() {
                                         key={metric.label}
                                         className="rounded-xl border border-slate-800 bg-slate-950 p-5"
                                     >
-                                        <p className="text-sm text-slate-400">{metric.label}</p>
+                                        <p className="text-sm text-slate-400">
+                                            {metric.label}
+                                        </p>
+
                                         <p className="mt-3 text-3xl font-bold">
                                             {metric.value == null
                                                 ? "—"
-                                                : `${metric.value.toFixed(2)}`}
+                                                : metric.value.toFixed(2)}
                                         </p>
-                                        <p className="mt-1 text-xs text-slate-500">Out of 100</p>
+
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            Out of 100
+                                        </p>
                                     </div>
                                 ))}
                             </div>
 
                             <div className="mt-6 grid gap-4 sm:grid-cols-2">
                                 <div className="rounded-xl border border-slate-800 p-5">
-                                    <p className="text-sm text-slate-400">Risk Tier</p>
+                                    <p className="text-sm text-slate-400">
+                                        Risk Tier
+                                    </p>
+
                                     <p className="mt-2 text-2xl font-bold">
                                         {score.tier ?? "Not assigned"}
                                     </p>
+
                                     <p className="mt-2 text-sm text-slate-400">
                                         Basis: {score.tier_basis.replaceAll("_", " ")}
                                     </p>
+
                                     <p className="mt-1 text-sm text-slate-400">
                                         Status: {score.status.replaceAll("_", " ")}
                                     </p>
                                 </div>
 
                                 <div className="rounded-xl border border-slate-800 p-5">
-                                    <p className="text-sm text-slate-400">Payment History</p>
+                                    <p className="text-sm text-slate-400">
+                                        Payment History
+                                    </p>
+
                                     <p className="mt-2">
                                         Resolved invoices:{" "}
                                         <strong>{score.resolved_invoice_count}</strong>
                                     </p>
+
                                     <p className="mt-2">
                                         Late rate:{" "}
-                                        <strong>{(score.late_rate * 100).toFixed(2)}%</strong>
+                                        <strong>
+                                            {(score.late_rate * 100).toFixed(2)}%
+                                        </strong>
                                     </p>
+
                                     <p className="mt-2">
                                         Average days late:{" "}
                                         <strong>{score.avg_days_late.toFixed(2)}</strong>
                                     </p>
+
                                     <p className="mt-2">
                                         Last 5 settled late rate:{" "}
                                         <strong>
@@ -163,19 +213,24 @@ export default function BuyerDetails() {
                                 </div>
 
                                 <div className="rounded-xl border border-slate-800 p-5">
-                                    <p className="text-sm text-slate-400">Exposure</p>
+                                    <p className="text-sm text-slate-400">
+                                        Exposure
+                                    </p>
+
                                     <p className="mt-2">
                                         Open exposure:{" "}
                                         <strong>
                                             ₹{score.open_exposure.toLocaleString("en-IN")}
                                         </strong>
                                     </p>
+
                                     <p className="mt-2">
                                         Overdue exposure:{" "}
                                         <strong>
                                             ₹{score.overdue_open_exposure.toLocaleString("en-IN")}
                                         </strong>
                                     </p>
+
                                     <p className="mt-2">
                                         Credit limit:{" "}
                                         <strong>
@@ -185,13 +240,16 @@ export default function BuyerDetails() {
                                 </div>
 
                                 <div className="rounded-xl border border-slate-800 p-5">
-                                    <p className="text-sm text-slate-400">Preview Information</p>
+                                    <p className="text-sm text-slate-400">
+                                        Preview Information
+                                    </p>
+
                                     <p className="mt-2">
                                         As of: <strong>{score.as_of_date}</strong>
                                     </p>
+
                                     <p className="mt-2 text-sm text-amber-300">
-                                        Read-only preview. This calculation does not save scores to
-                                        the database.
+                                        Read-only preview. This calculation does not save scores to the database.
                                     </p>
                                 </div>
                             </div>

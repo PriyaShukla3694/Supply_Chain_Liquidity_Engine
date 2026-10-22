@@ -19,12 +19,15 @@ import {
     Search,
     Settings,
     ShieldAlert,
+
+    TrendingUp,
     Users,
     Wallet,
     X,
 } from "lucide-react";
 
 import {
+    ApiError,
     getCurrentUser,
     getDashboardSummary,
     getDashboardInvoices,
@@ -38,7 +41,12 @@ import {
 
 const navigation = [
     { label: "Dashboard", icon: LayoutDashboard, path: "/" },
+    { label: "Invoices", icon: FileText, path: "/invoices" },
     { label: "Buyers", icon: Users, path: "/buyers" },
+    { label: "Risk Analysis", icon: ShieldAlert, path: "/risk" },
+    { label: "Forecast", icon: TrendingUp, path: "/forecast" },
+    { label: "Discounts", icon: BadgePercent, path: "/discounts" },
+    { label: "AI Assistant", icon: Bot, path: "/assistant" },
 ];
 
 const chartValues = [
@@ -220,7 +228,6 @@ export default function Dashboard() {
         const token = localStorage.getItem("access_token");
 
         if (!token) {
-            navigate("/login", { replace: true });
             return;
         }
 
@@ -241,37 +248,32 @@ export default function Dashboard() {
             localStorage.setItem("username", userData.username);
             localStorage.setItem("role", userData.role);
         } catch (err) {
+            if (err instanceof ApiError && err.status === 401) {
+                return;
+            }
+
             const message =
                 err instanceof Error
                     ? err.message
                     : "Unable to load dashboard data.";
 
-            if (
-                message.toLowerCase().includes("session expired") ||
-                message.toLowerCase().includes("401") ||
-                message.toLowerCase().includes("not authenticated")
-            ) {
-                logout();
-                navigate("/login", { replace: true });
-                return;
-            }
-
             setError(message);
         } finally {
             setLoading(false);
         }
-    }, [navigate]);
+    }, []);
 
     useEffect(() => {
-        const timer = setTimeout(() => {
+        const timer = window.setTimeout(() => {
             void loadDashboard();
         }, 0);
-        return () => clearTimeout(timer);
+
+        return () => window.clearTimeout(timer);
     }, [loadDashboard]);
 
     function handleLogout() {
-        logout();
         setProfileOpen(false);
+        logout();
         navigate("/login", { replace: true });
     }
 
@@ -279,7 +281,6 @@ export default function Dashboard() {
         const token = localStorage.getItem("access_token");
 
         if (!token) {
-            navigate("/login", { replace: true });
             return;
         }
 
@@ -308,20 +309,14 @@ export default function Dashboard() {
 
             setBuyerScore(result);
         } catch (err) {
+            if (err instanceof ApiError && err.status === 401) {
+                return;
+            }
+
             const message =
                 err instanceof Error
                     ? err.message
                     : "Unable to load buyer score.";
-
-            if (
-                message.toLowerCase().includes("session expired") ||
-                message.toLowerCase().includes("401") ||
-                message.toLowerCase().includes("not authenticated")
-            ) {
-                logout();
-                navigate("/login", { replace: true });
-                return;
-            }
 
             setScoreError(message);
         } finally {
@@ -628,8 +623,8 @@ export default function Dashboard() {
                         <div className="flex items-center gap-3">
                             <span
                                 className={`rounded-lg border px-3 py-2 text-xs ${error
-                                        ? "border-rose-500/20 bg-rose-500/[0.06] text-rose-300"
-                                        : "border-emerald-500/20 bg-emerald-500/[0.06] text-emerald-300"
+                                    ? "border-rose-500/20 bg-rose-500/[0.06] text-rose-300"
+                                    : "border-emerald-500/20 bg-emerald-500/[0.06] text-emerald-300"
                                     }`}
                             >
                                 {error ? "Connection issue" : "Live API"}
@@ -951,12 +946,12 @@ export default function Dashboard() {
 
                                         <span
                                             className={`rounded-xl px-3 py-2 text-sm font-semibold ${buyerScore.tier === "A"
-                                                    ? "bg-blue-500/10 text-blue-300"
-                                                    : buyerScore.tier === "B"
-                                                        ? "bg-violet-500/10 text-violet-300"
-                                                        : buyerScore.tier === "C"
-                                                            ? "bg-amber-500/10 text-amber-300"
-                                                            : "bg-slate-700 text-slate-300"
+                                                ? "bg-blue-500/10 text-blue-300"
+                                                : buyerScore.tier === "B"
+                                                    ? "bg-violet-500/10 text-violet-300"
+                                                    : buyerScore.tier === "C"
+                                                        ? "bg-amber-500/10 text-amber-300"
+                                                        : "bg-slate-700 text-slate-300"
                                                 }`}
                                         >
                                             {buyerScore.tier
@@ -1170,14 +1165,14 @@ export default function Dashboard() {
                                                 <td className="px-6 py-4">
                                                     <span
                                                         className={`inline-flex rounded-md px-2.5 py-1 text-xs font-medium ${invoice.tier
-                                                                ? `${tierColors[
-                                                                invoice.tier
-                                                                ] ?? "bg-slate-500"
-                                                                } ${tierTextColors[
-                                                                invoice.tier
-                                                                ] ?? "text-slate-300"
-                                                                }`
-                                                                : "bg-slate-700 text-slate-300"
+                                                            ? `${tierColors[
+                                                            invoice.tier
+                                                            ] ?? "bg-slate-500"
+                                                            } ${tierTextColors[
+                                                            invoice.tier
+                                                            ] ?? "text-slate-300"
+                                                            }`
+                                                            : "bg-slate-700 text-slate-300"
                                                             }`}
                                                     >
                                                         {invoice.tier
