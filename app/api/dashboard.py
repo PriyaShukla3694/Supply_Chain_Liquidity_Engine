@@ -1,14 +1,12 @@
-
-from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user
 from app.core.clock import business_today
-from app.models.user import User
+from app.core.business_rules import is_invoice_discount_eligible
+from app.core.currency import format_inr
 from app.models.invoice import Invoice
 from app.models.buyer import Buyer
 
@@ -41,6 +39,17 @@ def dashboard_summary(db: Session = Depends(get_db)):
                 or invoice.buyer.tier == "C"
             )
         )
+        and is_invoice_discount_eligible(
+            invoice_amount_inr=invoice.invoice_amount,
+            days_until_due=(invoice.due_date - today).days,
+            is_disputed=invoice.disputed,
+            invoice_status=invoice.invoice_status,
+            buyer_tier=(
+                invoice.buyer.tier
+                if invoice.buyer and invoice.buyer.tier
+                else "Tier-B"
+            ),
+        )[0]
     ]
 
     eligible_value = sum(
@@ -139,22 +148,37 @@ def dashboard_invoices(
         ):
             eligibility_status = "Ineligible"
         else:
-            eligibility_status = "Eligible"
+            eligible, _ = is_invoice_discount_eligible(
+                invoice_amount_inr=invoice.invoice_amount,
+                days_until_due=days_until_due,
+                is_disputed=invoice.disputed,
+                invoice_status=invoice.invoice_status,
+                buyer_tier=(
+                    buyer.tier if buyer and buyer.tier else "Tier-B"
+                ),
+            )
+            eligibility_status = (
+                "Eligible"
+                if eligible and not (buyer and buyer.blacklisted)
+                else "Ineligible"
+            )
 
         amount = Decimal(str(invoice.invoice_amount))
 
-        results.append({
-            "invoice_id": invoice.invoice_id,
-            "buyer_id": invoice.buyer_id,
-            "invoice_amount": str(amount),
-            "formatted_amount": f"₹{amount:,.2f}",
-            "invoice_date": invoice.invoice_date.isoformat(),
-            "due_date": invoice.due_date.isoformat(),
-            "days_until_due": days_until_due,
-            "tier": buyer.tier if buyer else None,
-            "invoice_status": invoice.invoice_status,
-            "disputed": invoice.disputed,
-            "eligibility_status": eligibility_status,
-        })
+        results.append(
+            {
+                "invoice_id": invoice.invoice_id,
+                "buyer_id": invoice.buyer_id,
+                "invoice_amount": str(amount),
+                "formatted_amount": format_inr(amount),
+                "invoice_date": invoice.invoice_date.isoformat(),
+                "due_date": invoice.due_date.isoformat(),
+                "days_until_due": days_until_due,
+                "tier": buyer.tier if buyer else None,
+                "invoice_status": invoice.invoice_status,
+                "disputed": invoice.disputed,
+                "eligibility_status": eligibility_status,
+            }
+        )
 
     return results
