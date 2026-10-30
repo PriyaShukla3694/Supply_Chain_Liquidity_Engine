@@ -8,6 +8,9 @@ class RiskScore(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True, index=True)
     buyer_id = Column(String(50), ForeignKey("buyers.buyer_id", ondelete="RESTRICT"), nullable=False, index=True)
+    # Note: payment_reliability, financial_risk, liquidity_risk, and overall_risk
+    # store HIGHER-IS-BETTER scores (0-100) exactly as calculated by the locked formulas.
+    # Higher scores indicate greater reliability and health (lower risk). Do not invert.
     payment_reliability = Column(Numeric(5, 2), nullable=False)
     financial_risk = Column(Numeric(5, 2), nullable=False)
     liquidity_risk = Column(Numeric(5, 2), nullable=False)
