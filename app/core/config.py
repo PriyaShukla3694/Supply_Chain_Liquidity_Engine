@@ -27,6 +27,11 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
+    # RAG / LLM configuration
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: Optional[str] = None
+    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [
@@ -37,11 +42,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def assemble_db_connection(self) -> "Settings":
-        if not self.database_url:
-            self.database_url = (
-                f"postgresql://{self.postgres_user}:{self.postgres_password}"
-                f"@localhost:5432/{self.postgres_db}"
-            )
+        # No automatic fallback; DATABASE_URL must be provided via env or default values.
         return self
 
     @property

@@ -26,6 +26,16 @@ from app.schemas.invoice import (
     MetricSummary,
     PaymentRead,
 )
+from app.schemas.prediction import (
+    LatePaymentPredictionRequest,
+    LatePaymentPredictionResponse,
+    LatePaymentPredictionResponseExtended,
+)
+from app.services.prediction import (
+    predict_late_payment,
+    build_features_from_invoice,
+    predict_late_payment_features,
+)
 
 router = APIRouter(prefix="/invoices", tags=["Invoices"])
 
@@ -34,7 +44,7 @@ def _enrich_invoice_read(
     invoice: Invoice,
     today: Optional[date] = None,
 ) -> InvoiceRead:
-    """Computes days_until_due and overdue_days according to business rules."""
+    """Compute days until due and overdue days."""
     if today is None:
         today = business_today()
 
@@ -48,7 +58,6 @@ def _enrich_invoice_read(
     read_model = InvoiceRead.model_validate(invoice)
     read_model.days_until_due = days_until_due
     read_model.overdue_days = overdue_days
-
     return read_model
 
 
@@ -56,7 +65,7 @@ def _enrich_invoice_detail(
     invoice: Invoice,
     today: Optional[date] = None,
 ) -> InvoiceDetailRead:
-    """Computes maturity metrics and attaches buyer and payment details."""
+    """Compute maturity metrics and attach buyer and payment details."""
     if today is None:
         today = business_today()
 
@@ -90,7 +99,7 @@ def _log_audit(
     entity_id: str,
     payload: dict,
 ) -> None:
-    """Writes an immutable audit log row for tracking state changes."""
+    """Write an audit log row for a state change."""
     audit = AuditLog(
         user_id=user_id,
         action=action,
@@ -107,7 +116,7 @@ def _log_audit(
     response_model=InvoiceSummary,
     summary="Get Invoices Summary",
     description=(
-        "Returns aggregate counts and ₹ totals for open, overdue, settled, "
+        "Returns aggregate counts and INR totals for open, overdue, settled, "
         "and disputed invoices scoped to the current user's company."
     ),
 )
@@ -121,20 +130,14 @@ def get_invoices_summary(
         db.query(
             func.coalesce(
                 func.sum(
-                    case(
-                        (Invoice.invoice_status == "open", 1),
-                        else_=0,
-                    )
+                    case((Invoice.invoice_status == "open", 1), else_=0)
                 ),
                 0,
             ).label("open_count"),
             func.coalesce(
                 func.sum(
                     case(
-                        (
-                            Invoice.invoice_status == "open",
-                            Invoice.invoice_amount,
-                        ),
+                        (Invoice.invoice_status == "open", Invoice.invoice_amount),
                         else_=Decimal("0.00"),
                     )
                 ),
@@ -168,10 +171,7 @@ def get_invoices_summary(
             ).label("overdue_total"),
             func.coalesce(
                 func.sum(
-                    case(
-                        (Invoice.invoice_status == "settled", 1),
-                        else_=0,
-                    )
+                    case((Invoice.invoice_status == "settled", 1), else_=0)
                 ),
                 0,
             ).label("settled_count"),
@@ -189,20 +189,14 @@ def get_invoices_summary(
             ).label("settled_total"),
             func.coalesce(
                 func.sum(
-                    case(
-                        (Invoice.disputed.is_(True), 1),
-                        else_=0,
-                    )
+                    case((Invoice.disputed.is_(True), 1), else_=0)
                 ),
                 0,
             ).label("disputed_count"),
             func.coalesce(
                 func.sum(
                     case(
-                        (
-                            Invoice.disputed.is_(True),
-                            Invoice.invoice_amount,
-                        ),
+                        (Invoice.disputed.is_(True), Invoice.invoice_amount),
                         else_=Decimal("0.00"),
                     )
                 ),
@@ -210,55 +204,25 @@ def get_invoices_summary(
             ).label("disputed_total"),
         )
         .select_from(Invoice)
-        .join(
-            Supplier,
-            Invoice.supplier_id == Supplier.supplier_id,
-        )
+        .join(Supplier, Invoice.supplier_id == Supplier.supplier_id)
         .filter(Supplier.company_id == current_user.company_id)
         .first()
     )
 
     open_count = int(stats.open_count or 0)
-    open_total = round(
-        Decimal(str(stats.open_total or 0)),
-        2,
-    )
-
+    open_total = round(Decimal(str(stats.open_total or 0)), 2)
     overdue_count = int(stats.overdue_count or 0)
-    overdue_total = round(
-        Decimal(str(stats.overdue_total or 0)),
-        2,
-    )
-
+    overdue_total = round(Decimal(str(stats.overdue_total or 0)), 2)
     settled_count = int(stats.settled_count or 0)
-    settled_total = round(
-        Decimal(str(stats.settled_total or 0)),
-        2,
-    )
-
+    settled_total = round(Decimal(str(stats.settled_total or 0)), 2)
     disputed_count = int(stats.disputed_count or 0)
-    disputed_total = round(
-        Decimal(str(stats.disputed_total or 0)),
-        2,
-    )
+    disputed_total = round(Decimal(str(stats.disputed_total or 0)), 2)
 
     return InvoiceSummary(
-        open=MetricSummary(
-            count=open_count,
-            total_amount=open_total,
-        ),
-        overdue=MetricSummary(
-            count=overdue_count,
-            total_amount=overdue_total,
-        ),
-        settled=MetricSummary(
-            count=settled_count,
-            total_amount=settled_total,
-        ),
-        disputed=MetricSummary(
-            count=disputed_count,
-            total_amount=disputed_total,
-        ),
+        open=MetricSummary(count=open_count, total_amount=open_total),
+        overdue=MetricSummary(count=overdue_count, total_amount=overdue_total),
+        settled=MetricSummary(count=settled_count, total_amount=settled_total),
+        disputed=MetricSummary(count=disputed_count, total_amount=disputed_total),
         open_count=open_count,
         open_total=open_total,
         overdue_count=overdue_count,
@@ -275,67 +239,32 @@ def get_invoices_summary(
     response_model=PaginatedResponse[InvoiceRead],
     summary="List Invoices",
     description=(
-        "Lists invoices scoped to the current user's company with rich "
-        "filtering, computed maturity dates, and pagination."
+        "Lists company invoices with filtering, maturity dates, and pagination."
     ),
 )
 def list_invoices(
     buyer_id: Optional[str] = Query(None, description="Filter by buyer ID"),
     supplier_id: Optional[str] = Query(None, description="Filter by supplier ID"),
     invoice_status: Optional[str] = Query(
-        None,
-        description="Filter by status ('open' or 'settled')",
+        None, description="Filter by status ('open' or 'settled')"
     ),
-    is_late: Optional[bool] = Query(
-        None,
-        description="Filter by late settlement status",
-    ),
-    disputed: Optional[bool] = Query(
-        None,
-        description="Filter by dispute flag",
-    ),
-    invoice_date_from: Optional[date] = Query(
-        None,
-        description="Earliest invoice issue date",
-    ),
-    invoice_date_to: Optional[date] = Query(
-        None,
-        description="Latest invoice issue date",
-    ),
-    due_date_from: Optional[date] = Query(
-        None,
-        description="Earliest due date",
-    ),
-    due_date_to: Optional[date] = Query(
-        None,
-        description="Latest due date",
-    ),
-    min_amount: Optional[Decimal] = Query(
-        None,
-        description="Minimum invoice amount in INR",
-    ),
-    max_amount: Optional[Decimal] = Query(
-        None,
-        description="Maximum invoice amount in INR",
-    ),
-    sort_by: Optional[str] = Query(
-        "invoice_date",
-        description="Field to sort by: invoice_date, due_date, invoice_amount",
-    ),
-    order: Optional[str] = Query(
-        "desc",
-        description="Sort order: asc, desc",
-    ),
+    is_late: Optional[bool] = Query(None, description="Filter by late settlement"),
+    disputed: Optional[bool] = Query(None, description="Filter by dispute flag"),
+    invoice_date_from: Optional[date] = Query(None),
+    invoice_date_to: Optional[date] = Query(None),
+    due_date_from: Optional[date] = Query(None),
+    due_date_to: Optional[date] = Query(None),
+    min_amount: Optional[Decimal] = Query(None),
+    max_amount: Optional[Decimal] = Query(None),
+    sort_by: Optional[str] = Query("invoice_date"),
+    order: Optional[str] = Query("desc"),
     pagination: PaginationParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     query = (
         db.query(Invoice)
-        .join(
-            Supplier,
-            Invoice.supplier_id == Supplier.supplier_id,
-        )
+        .join(Supplier, Invoice.supplier_id == Supplier.supplier_id)
         .filter(Supplier.company_id == current_user.company_id)
     )
 
@@ -347,13 +276,11 @@ def list_invoices(
 
     if invoice_status is not None:
         clean_status = invoice_status.strip().lower()
-
         if clean_status not in ("open", "settled"):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Invalid invoice_status. Must be 'open' or 'settled'",
             )
-
         query = query.filter(Invoice.invoice_status == clean_status)
 
     if is_late is not None:
@@ -396,7 +323,6 @@ def list_invoices(
         )
 
     clean_order = order.strip().lower() if order else "desc"
-
     if clean_order not in ("asc", "desc"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -404,29 +330,17 @@ def list_invoices(
         )
 
     sort_col = allowed_sort[sort_by]
-
     if clean_order == "desc":
-        query = query.order_by(
-            sort_col.desc(),
-            Invoice.invoice_id.desc(),
-        )
+        query = query.order_by(sort_col.desc(), Invoice.invoice_id.desc())
     else:
-        query = query.order_by(
-            sort_col.asc(),
-            Invoice.invoice_id.asc(),
-        )
+        query = query.order_by(sort_col.asc(), Invoice.invoice_id.asc())
 
     total = query.count()
     items = query.offset(pagination.offset).limit(pagination.limit).all()
-
     today = business_today()
-    enriched_items = [
-        _enrich_invoice_read(invoice, today)
-        for invoice in items
-    ]
 
     return PaginatedResponse[InvoiceRead](
-        items=enriched_items,
+        items=[_enrich_invoice_read(invoice, today) for invoice in items],
         total=total,
         page=pagination.page,
         page_size=pagination.page_size,
@@ -437,10 +351,6 @@ def list_invoices(
     "/{invoice_id}",
     response_model=InvoiceDetailRead,
     summary="Get Invoice Detail",
-    description=(
-        "Retrieves invoice details including buyer summary, payments list, "
-        "and computed maturity metrics."
-    ),
 )
 def get_invoice(
     invoice_id: int,
@@ -449,10 +359,7 @@ def get_invoice(
 ):
     invoice = (
         db.query(Invoice)
-        .join(
-            Supplier,
-            Invoice.supplier_id == Supplier.supplier_id,
-        )
+        .join(Supplier, Invoice.supplier_id == Supplier.supplier_id)
         .filter(
             Invoice.invoice_id == invoice_id,
             Supplier.company_id == current_user.company_id,
@@ -460,7 +367,7 @@ def get_invoice(
         .first()
     )
 
-    if not invoice:
+    if invoice is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Invoice '{invoice_id}' not found",
@@ -474,10 +381,6 @@ def get_invoice(
     response_model=InvoiceRead,
     status_code=status.HTTP_201_CREATED,
     summary="Create Invoice",
-    description=(
-        "Creates a new invoice in 'open' status. Requires 'admin' or "
-        "'finance_manager' role. Logs action in audit_logs."
-    ),
 )
 def create_invoice(
     invoice_in: InvoiceCreate,
@@ -489,7 +392,6 @@ def create_invoice(
         .filter(Buyer.buyer_id == invoice_in.buyer_id)
         .first()
     )
-
     if not buyer:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -504,14 +406,10 @@ def create_invoice(
         )
         .first()
     )
-
     if not supplier:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Supplier '{invoice_in.supplier_id}' "
-                "does not exist in your company"
-            ),
+            detail=f"Supplier '{invoice_in.supplier_id}' does not exist in your company",
         )
 
     if invoice_in.invoice_id is not None:
@@ -520,13 +418,11 @@ def create_invoice(
             .filter(Invoice.invoice_id == invoice_in.invoice_id)
             .first()
         )
-
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Invoice with ID {invoice_in.invoice_id} already exists",
             )
-
         new_id = invoice_in.invoice_id
     else:
         max_id = db.query(func.max(Invoice.invoice_id)).scalar() or 0
@@ -573,11 +469,6 @@ def create_invoice(
     "/{invoice_id}",
     response_model=InvoiceRead,
     summary="Update Invoice",
-    description=(
-        "Partially updates an invoice (disputed and amount only). Open "
-        "invoices can be updated by admin/finance_manager. Settled invoices "
-        "are immutable except by admin. Logs action in audit_logs."
-    ),
 )
 def update_invoice(
     invoice_id: int,
@@ -587,27 +478,20 @@ def update_invoice(
 ):
     invoice = (
         db.query(Invoice)
-        .join(
-            Supplier,
-            Invoice.supplier_id == Supplier.supplier_id,
-        )
+        .join(Supplier, Invoice.supplier_id == Supplier.supplier_id)
         .filter(
             Invoice.invoice_id == invoice_id,
             Supplier.company_id == current_user.company_id,
         )
         .first()
     )
-
     if not invoice:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Invoice '{invoice_id}' not found",
         )
 
-    if (
-        invoice.invoice_status == "settled"
-        and current_user.role != "admin"
-    ):
+    if invoice.invoice_status == "settled" and current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
@@ -617,7 +501,6 @@ def update_invoice(
         )
 
     update_data = invoice_in.model_dump(exclude_unset=True)
-
     if not update_data:
         return _enrich_invoice_read(invoice)
 
@@ -626,15 +509,9 @@ def update_invoice(
 
     for key, val in update_data.items():
         curr_val = getattr(invoice, key)
-        old_values[key] = (
-            str(curr_val) if isinstance(curr_val, Decimal) else curr_val
-        )
-
+        old_values[key] = str(curr_val) if isinstance(curr_val, Decimal) else curr_val
         setattr(invoice, key, val)
-
-        new_values[key] = (
-            str(val) if isinstance(val, Decimal) else val
-        )
+        new_values[key] = str(val) if isinstance(val, Decimal) else val
 
     db.commit()
     db.refresh(invoice)
@@ -644,10 +521,7 @@ def update_invoice(
         user_id=current_user.id,
         action="update",
         entity_id=str(invoice.invoice_id),
-        payload={
-            "previous": old_values,
-            "changes": new_values,
-        },
+        payload={"previous": old_values, "changes": new_values},
     )
 
     return _enrich_invoice_read(invoice)
@@ -657,11 +531,6 @@ def update_invoice(
     "/{invoice_id}/settle",
     response_model=InvoiceRead,
     summary="Mark Invoice Settled",
-    description=(
-        "Marks an open invoice as settled and computes days_late and "
-        "is_late relative to due_date. Requires 'admin' or "
-        "'finance_manager'. Logs action in audit_logs."
-    ),
 )
 def settle_invoice(
     invoice_id: int,
@@ -671,17 +540,13 @@ def settle_invoice(
 ):
     invoice = (
         db.query(Invoice)
-        .join(
-            Supplier,
-            Invoice.supplier_id == Supplier.supplier_id,
-        )
+        .join(Supplier, Invoice.supplier_id == Supplier.supplier_id)
         .filter(
             Invoice.invoice_id == invoice_id,
             Supplier.company_id == current_user.company_id,
         )
         .first()
     )
-
     if not invoice:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -700,7 +565,6 @@ def settle_invoice(
             detail="settled_date cannot be earlier than invoice_date",
         )
 
-    # Keep actual settlement date logic unchanged.
     days_diff = (settle_in.settled_date - invoice.due_date).days
     days_late = max(0, days_diff)
     is_late = days_diff > 0
@@ -726,6 +590,89 @@ def settle_invoice(
     )
 
     return _enrich_invoice_read(invoice)
+
+
+@router.post(
+    "/{invoice_id}/predict",
+    response_model=LatePaymentPredictionResponse,
+    summary="Predict Late Payment for a specific invoice",
+    description=(
+        "Predicts the probability that an invoice will be late "
+        "using the trained ML model."
+    ),
+)
+def predict_late_payment_endpoint(
+    invoice_id: int,
+    request: LatePaymentPredictionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles("admin", "finance_manager")
+    ),
+):
+    if request.invoice_id != invoice_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invoice_id mismatch",
+        )
+
+    invoice = (
+        db.query(Invoice)
+        .join(Supplier, Invoice.supplier_id == Supplier.supplier_id)
+        .filter(
+            Invoice.invoice_id == invoice_id,
+            Supplier.company_id == current_user.company_id,
+        )
+        .first()
+    )
+
+    if invoice is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Invoice '{invoice_id}' not found",
+        )
+
+    return predict_late_payment(request=request, db=db)
+
+
+@router.post(
+    "/{invoice_id}/predict/auto",
+    response_model=LatePaymentPredictionResponseExtended,
+    summary="Predict Late Payment Using Invoice Data",
+    description=(
+        "Builds model features from stored invoice and buyer history, "
+        "then predicts the probability of late payment."
+    ),
+)
+def predict_late_payment_auto_endpoint(
+    invoice_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_roles("admin", "finance_manager")
+    ),
+):
+    invoice = (
+        db.query(Invoice)
+        .join(Supplier, Invoice.supplier_id == Supplier.supplier_id)
+        .filter(
+            Invoice.invoice_id == invoice_id,
+            Supplier.company_id == current_user.company_id,
+        )
+        .first()
+    )
+
+    if invoice is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Invoice '{invoice_id}' not found",
+        )
+
+    features = build_features_from_invoice(invoice_id=invoice_id, db=db)
+
+    return predict_late_payment_features(
+        invoice_id=invoice_id,
+        features=features,
+        db=db,
+    )
 
 
 @router.delete(

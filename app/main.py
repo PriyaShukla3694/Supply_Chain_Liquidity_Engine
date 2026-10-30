@@ -19,6 +19,9 @@ from app.api.payments import router as payments_router
 from app.api.transactions import router as transactions_router
 from app.api.cash_flows import router as cash_flows_router
 from app.core.security import verify_password, get_password_hash
+from app.api.rag import router as rag_router
+from app.api.rag_answer import router as rag_answer_router
+from app.api.rag_ingest import router as rag_ingest_router
 
 app = FastAPI(
     title="AI-Driven Dynamic Discounting & Supply Chain Liquidity Engine API",
@@ -111,6 +114,9 @@ app.include_router(transactions_router)
 app.include_router(cash_flows_router)
 app.include_router(currency_router)
 app.include_router(dashboard_router)
+app.include_router(rag_router)
+app.include_router(rag_ingest_router)
+app.include_router(rag_answer_router)
 
 
 # --- Health Endpoints ---

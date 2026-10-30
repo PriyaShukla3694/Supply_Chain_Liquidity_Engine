@@ -500,3 +500,131 @@ export async function getInvoiceDetail(
 
     return response.json();
 }
+
+// --- Late Payment Prediction API ---
+export interface LatePaymentPredictionRequest {
+    invoice_id: number;
+    invoice_amount: number; // INR amount (backend will convert if >1000)
+    invoice_month: number; // 1-12 derived from invoice_date
+    invoice_dow: number; // 0=Mon … 6=Sun derived from invoice_date
+    has_history: 0 | 1; // 1 if buyer historical features are available
+    outstanding_amount_at_invoice: number; // source scale (₹000) – unknown set to 0
+    outstanding_count_at_invoice: number; // unknown set to 0
+    buyer_hist_late_rate?: number | null;
+    buyer_hist_avg_delay_days?: number | null;
+    buyer_hist_delay_std?: number | null;
+    buyer_hist_max_delay?: number | null;
+    country_code?: string | null;
+    paperless_bill?: string | null;
+}
+
+export interface LatePaymentPredictionResponse {
+    late_probability: number; // 0‑1
+    predicted_label: number; // 0=on‑time, 1=late
+}
+
+export async function predictInvoiceLatePayment(
+    token: string,
+    invoiceId: number,
+    payload: LatePaymentPredictionRequest,
+): Promise<LatePaymentPredictionResponse> {
+    const url = `${API_BASE_URL}/invoices/${invoiceId}/predict`;
+    const response = await authFetch(url, token, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+        const errMsg = await getErrorMessage(response, "Prediction request failed");
+        throw new ApiError(response.status, errMsg, errMsg);
+    }
+    return response.json();
+}
+
+export interface AutoLatePaymentPredictionResponse {
+    late_probability: number;
+    predicted_label: number;
+    threshold: number;
+    model_name: string;
+    model_version: string;
+    features_used: Record<string, number | string | null>;
+    calibrated: boolean;
+    scored_at: string;
+}
+
+export async function predictInvoiceLatePaymentAuto(
+    token: string,
+    invoiceId: number,
+): Promise<AutoLatePaymentPredictionResponse> {
+    const url = `${API_BASE_URL}/invoices/${encodeURIComponent(invoiceId)}/predict/auto`;
+
+    const response = await authFetch(url, token, {
+        method: "POST",
+    });
+
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to predict late-payment risk for this invoice.",
+        );
+
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+
+    return response.json();
+}
+
+export interface RagCitation {
+    index: number;
+    document_name: string;
+    document_type: string;
+    version: string;
+    chunk_index: number;
+}
+
+export interface RagSourceChunk {
+    document_name: string;
+    document_type: string;
+    version: string;
+    chunk_index: number;
+    chunk_text: string;
+    distance: number;
+}
+
+export interface RagAnswerResponse {
+    answer: string;
+    citations: RagCitation[];
+    source_chunks: RagSourceChunk[];
+}
+
+export async function askRagQuestion(
+    token: string,
+    query: string,
+    limit = 5,
+): Promise<RagAnswerResponse> {
+    const response = await authFetch(
+        `${API_BASE_URL}/rag/answer`,
+        token,
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                query,
+                limit,
+            }),
+        },
+    );
+
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to generate a policy explanation.",
+        );
+
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+
+    return response.json();
+}
