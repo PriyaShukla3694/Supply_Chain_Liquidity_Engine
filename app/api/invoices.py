@@ -606,7 +606,7 @@ def predict_late_payment_endpoint(
     request: LatePaymentPredictionRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles("admin", "finance_manager")
+        require_roles("admin", "finance_manager", "analyst")
     ),
 ):
     if request.invoice_id != invoice_id:
@@ -634,6 +634,11 @@ def predict_late_payment_endpoint(
     return predict_late_payment(request=request, db=db)
 
 
+@router.get(
+    "/{invoice_id}/predict/auto",
+    response_model=LatePaymentPredictionResponseExtended,
+    summary="Predict Late Payment Using Invoice Data",
+)
 @router.post(
     "/{invoice_id}/predict/auto",
     response_model=LatePaymentPredictionResponseExtended,
@@ -647,7 +652,7 @@ def predict_late_payment_auto_endpoint(
     invoice_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(
-        require_roles("admin", "finance_manager")
+        require_roles("admin", "finance_manager", "analyst")
     ),
 ):
     invoice = (
