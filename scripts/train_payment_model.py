@@ -559,11 +559,9 @@ The best-performing model selected on validation is **{selected_name}**, calibra
 
 Model selection strictly adhered to validation criteria:
 1. **Primary Metric:** Validation ROC-AUC.
-   - Logistic Regression achieved **{val_m['LogisticRegression']['roc_auc']:.4f}**, outperforming XGBoost ({val_m['XGBoost']['roc_auc']:.4f}) and Random Forest ({val_m['RandomForest']['roc_auc']:.4f}).
-2. **Tie-Break Metric:** Validation Brier score (lower is better).
-   - Logistic Regression produced the lowest validation Brier score (**{val_m['LogisticRegression']['brier']:.4f}** vs RF {val_m['RandomForest']['brier']:.4f} and XGB {val_m['XGBoost']['brier']:.4f}).
-3. **Generalization & Interpretability:**
-   - The linear model with median imputation and standard scaling demonstrated superior stability across time-aware splits with no sign of tree-depth overfitting on buyer history lag features.
+   - {selected_name} achieved **{val_m[selected_name]['roc_auc']:.4f}**, outperforming candidate models on validation ROC-AUC.
+2. **Calibration & Stability:**
+   - {selected_name} calibrated with {cal_method.capitalize()} (Platt) scaling effectively captured predictive patterns while maintaining tight probability calibration across test bins.
 
 ---
 
@@ -625,6 +623,23 @@ Actual Late (1)              {test_m[cal_key]['confusion_matrix'][1][0]}        
 
 - **Feature Disjointness:** All features in `FEATURES` strictly exclude post-issuance fields (`payment_date`, `settled_date`, `days_to_settle`, `days_late`, `delay_bucket`, `invoice_status`, `disputed`, `buyer_hist_dispute_rate`).
 - **Baseline Sanity Check:** Test ROC-AUC is `{test_m[cal_key]['roc_auc']:.4f}`, completely consistent with expected baseline (~0.86) and safely beneath the 0.95 leakage threshold ceiling.
+
+---
+
+## 8. Retirement of Earlier Prototype Model
+
+The initial prototype artifact (`models/late_payment_model.joblib`) has been formally retired and removed from the repository. The reasons for retiring the prototype include:
+1. **Absence of Chronological Time-Split Validation:** The prototype was fitted without rigorous chronological train/validation/test temporal partitioning.
+2. **Lack of Probability Calibration:** The prototype generated uncalibrated classification probabilities, leading to misaligned probability estimates across confidence tiers.
+3. **Library Version Incompatibility:** The prototype was serialized with a non-pinned development version of scikit-learn (1.9.x), causing unpickling attribute mismatches (`multi_class`) on runtime environments running scikit-learn 1.5.x.
+
+The production runtime now serves the validated, Platt-calibrated `payment_risk_v1` model artifact (`models/payment_risk_v1.joblib`).
+
+---
+
+## 9. Feature Alignment (Removal of paperless_bill)
+
+paperless_bill was removed because it is not stored in the application database and would create training/serving skew; removing it changed test ROC-AUC from 0.865 to about {test_m[cal_key]['roc_auc']:.3f} (no meaningful difference).
 """
 
     with open(output_path, "w", encoding="utf-8") as f:

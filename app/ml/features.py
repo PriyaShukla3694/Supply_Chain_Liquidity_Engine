@@ -11,7 +11,6 @@ import pandas as pd
 FEATURES: List[str] = [
     "country_code",
     "invoice_amount",
-    "paperless_bill",
     "invoice_month",
     "invoice_dow",
     "buyer_prior_invoice_count",
