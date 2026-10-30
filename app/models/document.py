@@ -16,6 +16,7 @@ class Document(Base):
     file_path = Column(String(500), nullable=True)
     mime_type = Column(String(100), nullable=True)
     file_size = Column(Integer, nullable=True)
+    content_hash = Column(String(64), nullable=True)  # SHA-256 hash of file content, nullable for legacy rows
     uploaded_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
