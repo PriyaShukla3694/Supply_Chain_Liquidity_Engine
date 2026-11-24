@@ -4,9 +4,9 @@ import pandas as pd
 import numpy as np
 
 from datetime import datetime
+from functools import lru_cache
 
 from sqlalchemy.orm import Session
-
 from fastapi import HTTPException, status
 
 from app.core.currency import inr_to_source
@@ -23,7 +23,18 @@ from app.schemas.prediction import (
 
 # Load the trained model pipeline (includes preprocessing).
 MODEL_PATH = "models/late_payment_model.joblib"
-model = joblib.load(MODEL_PATH)
+
+
+@lru_cache(maxsize=1)
+def _load_model():
+    """Load and cache the trained late-payment model."""
+
+    try:
+        return joblib.load(MODEL_PATH)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to load trained prediction model from {MODEL_PATH}"
+        ) from exc
 
 
 def _prepare_features(
@@ -68,6 +79,9 @@ def predict_late_payment(
     """Predict late payment from request features and save the result."""
 
     features_df = _prepare_features(request)
+
+    # Load the trained model before making a prediction.
+    model = _load_model()
 
     prob = float(model.predict_proba(features_df)[0, 1])
     label = int(prob >= 0.5)
@@ -126,7 +140,8 @@ def build_features_from_invoice(
 
     target_date = target.invoice_date
 
-    # Use only settled invoices whose outcomes were known by target_date.
+    # Use only settled invoices whose outcomes were known
+    # by the target invoice date.
     history = (
         db.query(Invoice)
         .filter(
@@ -201,7 +216,7 @@ def build_features_from_invoice(
         inr_to_source(float(target.invoice_amount))
     )
 
-    # Keep these feature names aligned with model training.
+    # Keep feature names aligned with model training.
     return {
         "invoice_amount": invoice_amount,
         "invoice_month": target.invoice_date.month,
@@ -210,11 +225,23 @@ def build_features_from_invoice(
         "outstanding_amount_at_invoice": (
             outstanding_amount_at_invoice
         ),
-        "outstanding_count_at_invoice": len(outstanding_invoices),
+        "outstanding_count_at_invoice": len(
+            outstanding_invoices
+        ),
         "buyer_hist_late_rate": buyer_hist_late_rate,
-        "buyer_hist_avg_delay_days": buyer_hist_avg_delay_days,
-        "buyer_hist_delay_std": float(np.std(delay_values, ddof=0)) if delay_values else None,
-        "buyer_hist_max_delay": float(max(delay_values)) if delay_values else None,
+        "buyer_hist_avg_delay_days": (
+            buyer_hist_avg_delay_days
+        ),
+        "buyer_hist_delay_std": (
+            float(np.std(delay_values, ddof=0))
+            if delay_values
+            else None
+        ),
+        "buyer_hist_max_delay": (
+            float(max(delay_values))
+            if delay_values
+            else None
+        ),
         "country_code": buyer.country_code,
         "paperless_bill": None,
     }
@@ -229,7 +256,11 @@ def predict_late_payment_features(
 
     features_df = pd.DataFrame([features])
 
+    # Load the trained model before making a prediction.
+    model = _load_model()
+
     prob = float(model.predict_proba(features_df)[0, 1])
+
     threshold = 0.5
     label = int(prob >= threshold)
 

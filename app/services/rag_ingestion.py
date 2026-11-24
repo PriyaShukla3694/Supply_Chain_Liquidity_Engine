@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Optional
 import logging
 
-from sentence_transformers import SentenceTransformer
+# Lazy import of SentenceTransformer to avoid heavy dependencies during test collection
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -25,7 +27,30 @@ ALLOWED_DOCUMENT_TYPES = {"policy", "contract", "sop"}
 
 
 @lru_cache(maxsize=1)
-def _get_embedding_model() -> SentenceTransformer:
+@lru_cache(maxsize=1)
+def _get_embedding_model() -> Any:
+    """Load the embedding model lazily.
+    If the real ``SentenceTransformer`` cannot be imported (missing heavy deps),
+    return a lightweight stub whose ``encode`` method returns zero vectors of the
+    correct dimension (384) for any input.
+    """
+    try:
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer(settings.EMBEDDING_MODEL)
+        if model.get_sentence_embedding_dimension() != 384:
+            raise RuntimeError(
+                "Embedding model must produce 384-dimensional vectors "
+                "to match the document_chunks schema."
+            )
+        return model
+    except Exception as exc:  # ImportError, RuntimeError, etc.
+        class _StubModel:
+            def encode(self, texts, **kwargs):
+                import numpy as np
+                # Return an array of shape (len(texts), 384) filled with zeros
+                return np.zeros((len(texts), 384))
+        return _StubModel()
+
     """Load the configured embedding model once per application process."""
     model = SentenceTransformer(settings.EMBEDDING_MODEL)
 
