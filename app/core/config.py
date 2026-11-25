@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     # Historical business date for the dataset
     REFERENCE_DATE: Optional[date] = None
+    BUSINESS_AS_OF_DATE: Optional[date] = None
 
     JWT_SECRET: str = "supersecretjwtkeyforlocaldevelopmentonly12345"
     JWT_ALGORITHM: str = "HS256"

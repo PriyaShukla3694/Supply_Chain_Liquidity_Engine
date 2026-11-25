@@ -2,8 +2,10 @@
 from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.clock import business_today
 from app.models.invoice import Invoice
 from app.models.buyer import Buyer
@@ -194,6 +196,28 @@ def calculate_buyer_payment_metrics(
     }
 
 
+def get_business_as_of_date(db: Session) -> date:
+    """Return the business as-of date for scoring and optimization.
+
+    Uses settings.BUSINESS_AS_OF_DATE if configured (env var BUSINESS_AS_OF_DATE).
+    Otherwise uses the latest invoice_date in the invoices table.
+    Never defaults to today's date for scoring.
+    """
+    if getattr(settings, "BUSINESS_AS_OF_DATE", None) is not None:
+        return settings.BUSINESS_AS_OF_DATE
+
+    latest_invoice_date = db.query(func.max(Invoice.invoice_date)).scalar()
+    if latest_invoice_date is not None:
+        return latest_invoice_date
+
+    if getattr(settings, "REFERENCE_DATE", None) is not None:
+        return settings.REFERENCE_DATE
+
+    raise ValueError(
+        "Cannot determine business as-of date: no invoices found and BUSINESS_AS_OF_DATE is unset."
+    )
+
+
 def preview_buyer_score(
     db: Session,
     buyer_id: str,
@@ -213,8 +237,8 @@ def preview_buyer_score(
     if buyer is None:
         raise ValueError(f"Buyer not found: {buyer_id}")
 
-    # Use configured historical business date when no date is provided.
-    as_of_date = as_of_date or business_today()
+    # Use specified as_of_date or resolve via business as-of date helper.
+    as_of_date = as_of_date or get_business_as_of_date(db)
 
     metrics = calculate_buyer_payment_metrics(db, buyer_id)
 
@@ -259,6 +283,19 @@ def preview_buyer_score(
         "as_of_date": as_of_date.isoformat(),
     }
 
+    # Handle credit_limit NULL or 0 without crashing: tier stays NULL, tier_basis='scoring_blocked'
+    if credit_limit <= 0:
+        result.update({
+            "reliability_score": None,
+            "financial_score": None,
+            "liquidity_score": None,
+            "overall_score": None,
+            "tier": None,
+            "tier_basis": "scoring_blocked",
+            "status": "credit_limit_decision_required",
+        })
+        return result
+
     # Cold-start: fewer than 5 resolved invoices.
     if metrics["resolved_invoice_count"] < 5:
         result.update({
@@ -269,19 +306,6 @@ def preview_buyer_score(
             "tier": "B",
             "tier_basis": "cold_start",
             "status": "provisional",
-        })
-        return result
-
-    # Do not invent a score when the credit limit is unresolved.
-    if credit_limit <= 0:
-        result.update({
-            "reliability_score": None,
-            "financial_score": None,
-            "liquidity_score": None,
-            "overall_score": None,
-            "tier": None,
-            "tier_basis": "scoring_blocked",
-            "status": "credit_limit_decision_required",
         })
         return result
 

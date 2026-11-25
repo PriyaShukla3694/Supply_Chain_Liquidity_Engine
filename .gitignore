@@ -108,6 +108,7 @@ pgdata/
 
 # Machine learning artifacts & models
 *.joblib
+models/*.joblib
 *.pkl
 
 # Data directory & large raw CSV files

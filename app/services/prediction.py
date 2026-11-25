@@ -1,18 +1,16 @@
 
 from datetime import datetime, timezone
-import functools
+from functools import lru_cache
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import joblib
 import numpy as np
 import pandas as pd
-
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.currency import inr_to_source
 from app.ml.features import FEATURES
 from app.models.buyer import Buyer
 from app.models.invoice import Invoice
@@ -23,91 +21,120 @@ from app.schemas.prediction import (
     LatePaymentPredictionResponseExtended,
 )
 
-
 logger = logging.getLogger(__name__)
 
+# -------------------------------------------------------------------
+# Model configuration
+# -------------------------------------------------------------------
 
-# Existing trained Logistic Regression pipeline.
-MODEL_PATH = Path("models/late_payment_model.joblib")
-MODEL_NAME = "late_payment_logistic"
-MODEL_VERSION = "late_payment_v1"
+MODEL_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "models"
+    / "payment_risk_v1.joblib"
+)
 
+MODEL_NAME = "payment_risk_xgb"
+MODEL_VERSION = "payment_risk_v1"
 
-# Original trained model supports exactly these 12 features.
-MODEL_FEATURES = [
-    "invoice_amount",
-    "invoice_month",
-    "invoice_dow",
-    "has_history",
-    "outstanding_amount_at_invoice",
-    "outstanding_count_at_invoice",
-    "buyer_hist_late_rate",
-    "buyer_hist_avg_delay_days",
-    "buyer_hist_delay_std",
-    "buyer_hist_max_delay",
-    "country_code",
-    "paperless_bill",
-]
+DEFAULT_THRESHOLD = 0.25
+LOW_RISK_THRESHOLD = 0.25
+HIGH_RISK_THRESHOLD = 0.55
 
 
-RISK_THRESHOLD_LOW = 0.25
-RISK_THRESHOLD_MEDIUM = 0.55
-
-# Original Logistic Regression model uses threshold 0.5.
-PREDICTION_THRESHOLD = 0.5
-
+# -------------------------------------------------------------------
+# Risk classification
+# -------------------------------------------------------------------
 
 def get_risk_label(probability: float) -> str:
-    """Categorize late-payment probability into risk tiers."""
-
-    if probability < RISK_THRESHOLD_LOW:
+    if probability < LOW_RISK_THRESHOLD:
         return "LOW"
 
-    if probability <= RISK_THRESHOLD_MEDIUM:
+    if probability < HIGH_RISK_THRESHOLD:
         return "MEDIUM"
 
     return "HIGH"
 
 
-@functools.lru_cache(maxsize=1)
-def load_payment_model():
-    """Load and validate the existing sklearn Pipeline."""
+# -------------------------------------------------------------------
+# Model loading
+# -------------------------------------------------------------------
+
+@lru_cache(maxsize=1)
+def load_payment_model() -> dict:
+    """
+    Load the calibrated payment_risk_v1 artifact.
+
+    The artifact contains:
+      - model
+      - calibrator
+      - threshold
+      - threshold_recall80
+      - features
+      - version
+    """
 
     if not MODEL_PATH.exists():
-        logger.error("Payment model not found: %s", MODEL_PATH)
-
+        logger.error("Payment model artifact not found: %s", MODEL_PATH)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "detail": "Payment prediction model is unavailable",
+                "detail": "Model not available",
                 "code": "MODEL_UNAVAILABLE",
             },
         )
 
     try:
-        model = joblib.load(MODEL_PATH)
+        artifact = joblib.load(MODEL_PATH)
+
+        if not isinstance(artifact, dict):
+            raise ValueError("Unexpected model artifact format")
+
+        required_keys = {
+            "model",
+            "calibrator",
+            "threshold",
+            "features",
+            "version",
+        }
+
+        missing = required_keys - set(artifact.keys())
+
+        if missing:
+            raise ValueError(
+                f"Model artifact is missing keys: {sorted(missing)}"
+            )
+
+        if artifact["version"] != MODEL_VERSION:
+            raise ValueError(
+                f"Unexpected model version: {artifact['version']}"
+            )
+
+        if list(artifact["features"]) != list(FEATURES):
+            raise ValueError(
+                "Artifact feature order does not match app.ml.features.FEATURES"
+            )
+
+        model = artifact["model"]
+        calibrator = artifact["calibrator"]
 
         if not hasattr(model, "predict_proba"):
-            raise ValueError(
-                "Loaded model does not support predict_proba"
-            )
+            raise ValueError("Model does not support predict_proba")
 
-        if not hasattr(model, "feature_names_in_"):
-            raise ValueError(
-                "Model does not contain feature_names_in_"
-            )
+        if not hasattr(calibrator, "predict_proba"):
+            raise ValueError("Calibrator does not support predict_proba")
 
-        saved_features = list(model.feature_names_in_)
+        threshold = float(artifact["threshold"])
 
-        if saved_features != MODEL_FEATURES:
-            raise ValueError(
-                f"Model feature mismatch. "
-                f"Expected {MODEL_FEATURES}, received {saved_features}"
-            )
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError("Invalid model threshold")
 
-        logger.info("Payment prediction model loaded successfully")
+        logger.info(
+            "Loaded payment model: version=%s threshold=%.4f",
+            artifact["version"],
+            threshold,
+        )
 
-        return model
+        return artifact
 
     except HTTPException:
         raise
@@ -118,216 +145,211 @@ def load_payment_model():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "detail": "Payment prediction model is unavailable",
+                "detail": "Model not available",
                 "code": "MODEL_UNAVAILABLE",
             },
         ) from exc
 
 
-def _to_model_country_code(value: Any):
-    """Keep country code categorical, matching model training."""
+# -------------------------------------------------------------------
+# Feature conversion helpers
+# -------------------------------------------------------------------
+
+def _to_numeric(value: Any) -> Optional[float]:
+    """Convert a value to float; return None for invalid or missing data."""
 
     if value is None:
         return None
 
-    value = str(value).strip()
+    try:
+        result = float(value)
 
-    return value if value else None
+        if not np.isfinite(result):
+            return None
 
+        return result
 
-def _to_model_paperless(value: Any):
-    """Convert paperless billing to original training categories."""
-
-    if value is None:
+    except (TypeError, ValueError):
         return None
-
-    value = str(value).strip().lower()
-
-    if value in ("electronic", "1", "true", "yes"):
-        return "Electronic"
-
-    if value in ("paper", "0", "false", "no"):
-        return "Paper"
-
-    return None
 
 
 def _build_model_dataframe(features: dict) -> pd.DataFrame:
-    """Create a DataFrame containing exactly the original 12 features."""
+    """
+    Build the numeric model input using the exact 16-feature order.
 
-    missing = [
-        feature
-        for feature in MODEL_FEATURES
+    Missing values are represented as NaN. The XGBoost model supports
+    missing numeric values.
+    """
+
+    missing_features = [
+        feature for feature in FEATURES
         if feature not in features
     ]
 
-    if missing:
-        raise ValueError(f"Missing model features: {missing}")
+    if missing_features:
+        raise ValueError(
+            f"Missing required model features: {missing_features}"
+        )
 
-    model_features = {
-        feature: features[feature]
-        for feature in MODEL_FEATURES
-    }
+    row = {}
 
-    model_features["country_code"] = _to_model_country_code(
-        model_features["country_code"]
-    )
+    for feature in FEATURES:
+        value = _to_numeric(features[feature])
+        row[feature] = np.nan if value is None else value
 
-    model_features["paperless_bill"] = _to_model_paperless(
-        model_features["paperless_bill"]
-    )
-
-    # Do not cast the whole DataFrame to float.
-    # country_code and paperless_bill are categorical.
     return pd.DataFrame(
-        [model_features],
-        columns=MODEL_FEATURES,
+        [[row[feature] for feature in FEATURES]],
+        columns=FEATURES,
+        dtype=float,
     )
 
+
+# -------------------------------------------------------------------
+# Prediction explanations
+# -------------------------------------------------------------------
 
 def format_feature_reason(feat_name: str, value: Any) -> str:
-    """Create simple explanations for prediction features."""
+    """Create a human-readable explanation for an important feature."""
 
-    if value is None or pd.isna(value):
-        return (
-            f"Historical {feat_name.replace('_', ' ')} "
-            "information is unavailable"
-        )
+    numeric_value = _to_numeric(value)
 
-    try:
-        numeric_value = float(value)
-    except (ValueError, TypeError):
-        return (
-            f"{feat_name.replace('_', ' ').capitalize()} "
-            "contributes to the risk assessment"
-        )
+    if numeric_value is None:
+        return f"{feat_name.replace('_', ' ').capitalize()} is unavailable."
 
     if feat_name == "buyer_hist_late_rate":
         return (
-            f"Buyer previously paid late on "
-            f"{numeric_value * 100:.0f}% of invoices"
+            f"Buyer historical late-payment rate is "
+            f"{numeric_value:.0%}."
         )
 
     if feat_name == "buyer_hist_avg_delay_days":
         return (
-            f"Buyer's average historical delay is "
-            f"{numeric_value:.1f} days"
-        )
-
-    if feat_name == "buyer_hist_max_delay":
-        return (
-            f"Buyer's maximum historical payment delay "
-            f"is {numeric_value:.0f} days"
+            f"Buyer historically takes an average of "
+            f"{numeric_value:.1f} days late."
         )
 
     if feat_name == "buyer_hist_delay_std":
         return (
-            f"Historical payment delay variation is "
-            f"{numeric_value:.1f} days"
+            f"Buyer payment delays vary by approximately "
+            f"{numeric_value:.1f} days."
+        )
+
+    if feat_name == "buyer_hist_max_delay":
+        return (
+            f"Buyer has a historical maximum payment delay of "
+            f"{numeric_value:.0f} days."
+        )
+
+    if feat_name == "buyer_last_invoice_delay":
+        return (
+            f"Buyer's most recent known payment delay was "
+            f"{numeric_value:.0f} days."
+        )
+
+    if feat_name == "buyer_days_since_last_invoice":
+        return (
+            f"{numeric_value:.0f} days have passed since "
+            f"the buyer's previous invoice."
+        )
+
+    if feat_name == "buyer_prior_invoice_count":
+        return (
+            f"Buyer has {numeric_value:.0f} previous invoices."
         )
 
     if feat_name == "invoice_amount":
         return (
-            f"Invoice amount is approximately "
-            f"₹{numeric_value * 1000:,.2f}"
+            f"Invoice amount is ₹{numeric_value:,.2f}."
+        )
+
+    if feat_name == "buyer_hist_avg_amount":
+        return (
+            f"Buyer's historical average invoice amount is "
+            f"₹{numeric_value:,.2f}."
+        )
+
+    if feat_name == "amount_vs_buyer_avg_ratio":
+        return (
+            f"Invoice amount is {numeric_value:.2f} times "
+            f"the buyer's historical average."
         )
 
     if feat_name == "outstanding_amount_at_invoice":
         return (
-            f"Outstanding buyer exposure is approximately "
-            f"₹{numeric_value * 1000:,.2f}"
+            f"Buyer had ₹{numeric_value:,.2f} outstanding "
+            f"at the invoice date."
         )
 
     if feat_name == "outstanding_count_at_invoice":
         return (
-            f"Buyer had {int(numeric_value)} outstanding invoices"
+            f"Buyer had {numeric_value:.0f} outstanding invoices."
         )
 
     if feat_name == "has_history":
         return (
-            "Buyer has previous payment history"
+            "Historical payment outcomes are available."
             if numeric_value == 1
-            else "Buyer has no previous payment history"
+            else "No settled historical payment outcomes are available."
         )
 
+    if feat_name == "country_code":
+        return f"Buyer country code is {numeric_value:g}."
+
+    if feat_name == "invoice_month":
+        return f"Invoice was issued in month {numeric_value:.0f}."
+
+    if feat_name == "invoice_dow":
+        return f"Invoice weekday value is {numeric_value:.0f}."
+
     return (
-        f"{feat_name.replace('_', ' ').capitalize()} "
-        "contributes to the prediction"
+        f"{feat_name.replace('_', ' ').capitalize()}: "
+        f"{numeric_value:.2f}."
     )
 
 
 def explain_prediction(
-    model,
+    artifact: dict,
     features_df: pd.DataFrame,
     features_dict: dict,
     top_k: int = 3,
-) -> list[str]:
+) -> List[str]:
     """
-    Generate simple explanations from the trained pipeline.
+    Generate feature-importance-based explanations.
 
-    The model uses preprocessing with one-hot encoding.
+    These explanations describe influential model inputs. They are not
+    guaranteed to represent the direction or causal effect of each input.
     """
 
     try:
-        classifier = model.named_steps.get("classifier")
+        model = artifact["model"]
+        importances = getattr(model, "feature_importances_", None)
 
-        if classifier is None or not hasattr(classifier, "coef_"):
+        if importances is None:
             return []
 
-        coefficients = classifier.coef_[0]
+        importances = np.asarray(importances, dtype=float)
 
-        preprocessor = model.named_steps.get("preprocessing")
-
-        if preprocessor is None:
-            return []
-
-        transformed = preprocessor.transform(features_df)
-
-        if hasattr(transformed, "toarray"):
-            transformed = transformed.toarray()
-
-        values = np.asarray(transformed)[0]
-
-        contributions = coefficients * values
-
-        if len(contributions) != len(values):
-            return []
-
-        try:
-            transformed_names = (
-                preprocessor.get_feature_names_out()
+        if len(importances) != len(FEATURES):
+            logger.warning(
+                "Feature importance count does not match feature count"
             )
-        except Exception:
             return []
 
-        ranked = sorted(
-            zip(contributions, transformed_names),
-            key=lambda item: item[0],
-            reverse=True,
-        )
+        ranked_indices = np.argsort(importances)[::-1]
 
         reasons = []
 
-        for contribution, transformed_name in ranked:
-            if contribution <= 0:
+        for index in ranked_indices:
+            if importances[index] <= 0:
                 continue
 
-            matched_feature = next(
-                (
-                    name
-                    for name in MODEL_FEATURES
-                    if name in transformed_name
-                ),
-                None,
-            )
+            feature_name = FEATURES[index]
+            value = features_dict.get(feature_name)
 
-            if matched_feature is None:
+            if value is None:
                 continue
 
-            reason = format_feature_reason(
-                matched_feature,
-                features_dict.get(matched_feature),
-            )
+            reason = format_feature_reason(feature_name, value)
 
             if reason not in reasons:
                 reasons.append(reason)
@@ -342,16 +364,19 @@ def explain_prediction(
         return []
 
 
+# -------------------------------------------------------------------
+# Build features from database
+# -------------------------------------------------------------------
+
 def build_features_from_invoice(
     invoice_id: int,
     db: Session,
 ) -> dict:
     """
-    Build all 17 application features using information available
-    strictly as of the target invoice's invoice_date.
+    Build the exact 16 application features using information available
+    as of the target invoice's invoice_date.
 
-    Database monetary values are INR.
-    Model monetary inputs are in ₹000.
+    Database monetary values and model monetary inputs are both INR.
     """
 
     target = (
@@ -380,7 +405,10 @@ def build_features_from_invoice(
 
     target_date = target.invoice_date
 
-    # 1. Previous invoices issued before target date.
+    if target_date is None:
+        raise ValueError("Target invoice has no invoice_date")
+
+    # 1. All invoices issued before the target invoice date.
     prior_invoices = (
         db.query(Invoice)
         .filter(
@@ -390,16 +418,19 @@ def build_features_from_invoice(
         .all()
     )
 
-    prior_count = len(prior_invoices)
+    buyer_prior_invoice_count = len(prior_invoices)
 
-    if prior_count:
+    if prior_invoices:
         prior_dates = [
             invoice.invoice_date
             for invoice in prior_invoices
+            if invoice.invoice_date is not None
         ]
 
-        days_since_last_invoice = float(
-            (target_date - max(prior_dates)).days
+        days_since_last_invoice = (
+            float((target_date - max(prior_dates)).days)
+            if prior_dates
+            else None
         )
 
         prior_amounts = [
@@ -408,19 +439,19 @@ def build_features_from_invoice(
             if invoice.invoice_amount is not None
         ]
 
-        buyer_hist_avg_amount_inr = (
-            sum(prior_amounts) / len(prior_amounts)
+        buyer_hist_avg_amount = (
+            float(np.mean(prior_amounts))
             if prior_amounts
             else None
         )
 
         if (
-            buyer_hist_avg_amount_inr is not None
-            and buyer_hist_avg_amount_inr > 0
+            buyer_hist_avg_amount is not None
+            and buyer_hist_avg_amount > 0
+            and target.invoice_amount is not None
         ):
             amount_vs_buyer_avg_ratio = round(
-                float(target.invoice_amount)
-                / buyer_hist_avg_amount_inr,
+                float(target.invoice_amount) / buyer_hist_avg_amount,
                 4,
             )
         else:
@@ -428,15 +459,16 @@ def build_features_from_invoice(
 
     else:
         days_since_last_invoice = None
-        buyer_hist_avg_amount_inr = None
+        buyer_hist_avg_amount = None
         amount_vs_buyer_avg_ratio = None
 
-    # 2. Settled outcomes already known before target invoice date.
+    # 2. Historical outcomes known before the target invoice date.
     outcome_invoices = (
         db.query(Invoice)
         .filter(
             Invoice.buyer_id == target.buyer_id,
             Invoice.invoice_id != target.invoice_id,
+            Invoice.invoice_date < target_date,
             Invoice.invoice_status == "settled",
             Invoice.settled_date.isnot(None),
             Invoice.settled_date < target_date,
@@ -446,8 +478,8 @@ def build_features_from_invoice(
 
     outcome_invoices.sort(
         key=lambda invoice: (
-            invoice.invoice_date,
             invoice.settled_date,
+            invoice.invoice_date,
             invoice.invoice_id,
         )
     )
@@ -466,8 +498,6 @@ def build_features_from_invoice(
         else None
     )
 
-    # Collect all known historical delays.
-    # Missing days_late values are ignored.
     delays = [
         float(invoice.days_late)
         for invoice in outcome_invoices
@@ -477,8 +507,12 @@ def build_features_from_invoice(
     if delays:
         buyer_hist_avg_delay_days = float(np.mean(delays))
 
-        # Population standard deviation: ddof=0.
-        buyer_hist_delay_std = float(np.std(delays, ddof=0))
+        # Match test_prediction_features.py: sample standard deviation.
+        buyer_hist_delay_std = (
+            float(np.std(delays, ddof=1))
+            if len(delays) > 1
+            else 0.0
+        )
 
         buyer_hist_max_delay = float(max(delays))
 
@@ -487,7 +521,6 @@ def build_features_from_invoice(
         buyer_hist_delay_std = None
         buyer_hist_max_delay = None
 
-    # Latest prior outcome's delay.
     latest_outcome = (
         outcome_invoices[-1]
         if outcome_invoices
@@ -501,7 +534,7 @@ def build_features_from_invoice(
         else None
     )
 
-    # 3. Outstanding invoices at target invoice issue date.
+    # 3. Outstanding invoices as of target invoice issue date.
     issued_prior = (
         db.query(Invoice)
         .filter(
@@ -521,84 +554,77 @@ def build_features_from_invoice(
         )
     ]
 
-    outstanding_amount_inr = sum(
-        float(invoice.invoice_amount)
-        for invoice in outstanding_invoices
-        if invoice.invoice_amount is not None
+    outstanding_amount_at_invoice = float(
+        sum(
+            float(invoice.invoice_amount)
+            for invoice in outstanding_invoices
+            if invoice.invoice_amount is not None
+        )
     )
 
     outstanding_count_at_invoice = len(outstanding_invoices)
 
-    # 4. Country code is categorical in the original model.
-    country_code = _to_model_country_code(
-        buyer.country_code
-    )
+    # 4. Numeric country code. Unknown categorical values become missing.
+    country_code = _to_numeric(buyer.country_code)
 
-    # 5. Build the full 17-feature application feature dictionary.
+    # 5. Build exact model features. Amounts remain in INR.
     features = {
         "country_code": country_code,
-
-        "invoice_amount": float(
-            inr_to_source(float(target.invoice_amount))
+        "invoice_amount": (
+            float(target.invoice_amount)
+            if target.invoice_amount is not None
+            else None
         ),
-
-        # No reliable paperless_bill field exists in the current
-        # database model, so do not invent a value.
-        "paperless_bill": None,
-
-        "invoice_month": target.invoice_date.month,
-        "invoice_dow": target.invoice_date.weekday(),
-
-        "buyer_prior_invoice_count": prior_count,
-
+        "invoice_month": target_date.month,
+        "invoice_dow": target_date.weekday(),
+        "buyer_prior_invoice_count": buyer_prior_invoice_count,
         "buyer_hist_late_rate": buyer_hist_late_rate,
         "buyer_hist_avg_delay_days": buyer_hist_avg_delay_days,
         "buyer_hist_delay_std": buyer_hist_delay_std,
         "buyer_hist_max_delay": buyer_hist_max_delay,
-
         "buyer_last_invoice_delay": buyer_last_invoice_delay,
         "buyer_days_since_last_invoice": days_since_last_invoice,
-
-        "buyer_hist_avg_amount": (
-            float(inr_to_source(buyer_hist_avg_amount_inr))
-            if buyer_hist_avg_amount_inr is not None
-            else None
-        ),
-
+        "buyer_hist_avg_amount": buyer_hist_avg_amount,
         "amount_vs_buyer_avg_ratio": amount_vs_buyer_avg_ratio,
-
-        "outstanding_amount_at_invoice": float(
-            inr_to_source(outstanding_amount_inr)
-        ),
-
+        "outstanding_amount_at_invoice": outstanding_amount_at_invoice,
         "outstanding_count_at_invoice": outstanding_count_at_invoice,
-
         "has_history": has_history,
     }
 
-    if set(features.keys()) != set(FEATURES):
+    if list(features.keys()) != list(FEATURES):
         raise RuntimeError(
-            "Feature mismatch between prediction service and "
-            "app.ml.features.FEATURES"
+            "Feature order mismatch between prediction service "
+            "and app.ml.features.FEATURES"
         )
 
     return features
 
 
-def _predict_probability(model, features: dict) -> tuple:
-    """Run prediction using the original 12-feature model contract."""
+# -------------------------------------------------------------------
+# Core calibrated prediction
+# -------------------------------------------------------------------
+
+def _predict_probability(
+    artifact: dict,
+    features: dict,
+) -> Tuple[float, int, float, str, List[str]]:
+    """Run calibrated prediction using the selected production artifact."""
 
     features_df = _build_model_dataframe(features)
 
-    probability = float(
-        model.predict_proba(features_df)[0, 1]
-    )
+    calibrator = artifact["calibrator"]
+    threshold = float(artifact["threshold"])
+
+    probabilities = calibrator.predict_proba(features_df)
+
+    probability = float(probabilities[0, 1])
 
     if not np.isfinite(probability):
         raise ValueError("Model returned an invalid probability")
 
-    label = int(probability >= PREDICTION_THRESHOLD)
+    probability = float(np.clip(probability, 0.0, 1.0))
 
+    label = int(probability >= threshold)
     on_time_probability = float(
         np.clip(1.0 - probability, 0.0, 1.0)
     )
@@ -606,7 +632,7 @@ def _predict_probability(model, features: dict) -> tuple:
     risk_label = get_risk_label(probability)
 
     reasons = explain_prediction(
-        model,
+        artifact,
         features_df,
         features,
     )
@@ -620,129 +646,16 @@ def _predict_probability(model, features: dict) -> tuple:
     )
 
 
-def predict_late_payment(
-    request: LatePaymentPredictionRequest,
-    db: Session,
-) -> LatePaymentPredictionResponse:
-    """
-    Predict using manually supplied partial features.
+# -------------------------------------------------------------------
+# Persist prediction
+# -------------------------------------------------------------------
 
-    Missing historical values are imputed by the original
-    sklearn preprocessing pipeline.
-    """
-
-    model = load_payment_model()
-
-    country_code = _to_model_country_code(
-        request.country_code
-    )
-
-    features_dict = {
-        "country_code": country_code,
-
-        "invoice_amount": float(
-            inr_to_source(float(request.invoice_amount))
-        ),
-
-        "paperless_bill": _to_model_paperless(
-            getattr(request, "paperless_bill", None)
-        ),
-
-        "invoice_month": request.invoice_month,
-        "invoice_dow": request.invoice_dow,
-
-        "buyer_prior_invoice_count": np.nan,
-
-        "buyer_hist_late_rate": request.buyer_hist_late_rate,
-        "buyer_hist_avg_delay_days": request.buyer_hist_avg_delay_days,
-        "buyer_hist_delay_std": request.buyer_hist_delay_std,
-        "buyer_hist_max_delay": request.buyer_hist_max_delay,
-
-        "buyer_last_invoice_delay": np.nan,
-        "buyer_days_since_last_invoice": np.nan,
-        "buyer_hist_avg_amount": np.nan,
-        "amount_vs_buyer_avg_ratio": np.nan,
-
-        "outstanding_amount_at_invoice": float(
-            inr_to_source(
-                float(request.outstanding_amount_at_invoice)
-            )
-        ),
-
-        "outstanding_count_at_invoice": (
-            request.outstanding_count_at_invoice
-        ),
-
-        "has_history": request.has_history,
-    }
-
-    (
-        probability,
-        label,
-        on_time_probability,
-        risk_label,
-        reasons,
-    ) = _predict_probability(model, features_dict)
-
-    prediction = ModelPrediction(
-        invoice_id=request.invoice_id,
-        model_name=MODEL_NAME,
-        model_version=MODEL_VERSION,
-        late_probability=probability,
-        predicted_days_late=None,
-    )
-
-    try:
-        db.add(prediction)
-        db.commit()
-        db.refresh(prediction)
-
-    except Exception:
-        db.rollback()
-        raise
-
-    return LatePaymentPredictionResponse(
-        late_probability=probability,
-        predicted_label=label,
-        on_time_probability=on_time_probability,
-        risk_label=risk_label,
-        partial_features=True,
-        reasons=reasons,
-    )
-
-
-def predict_late_payment_features(
+def _save_prediction(
     invoice_id: int,
-    features: dict,
+    probability: float,
     db: Session,
-) -> LatePaymentPredictionResponseExtended:
-    """
-    Predict using all 17 database-built features.
-
-    The existing trained model receives only its original
-    12 supported features.
-    """
-
-    model = load_payment_model()
-
-    missing_features = [
-        feature
-        for feature in FEATURES
-        if feature not in features
-    ]
-
-    if missing_features:
-        raise ValueError(
-            f"Missing model features: {missing_features}"
-        )
-
-    (
-        probability,
-        label,
-        on_time_probability,
-        risk_label,
-        reasons,
-    ) = _predict_probability(model, features)
+) -> ModelPrediction:
+    """Persist a prediction and return the refreshed database record."""
 
     prediction = ModelPrediction(
         invoice_id=invoice_id,
@@ -761,6 +674,108 @@ def predict_late_payment_features(
         db.rollback()
         raise
 
+    return prediction
+
+
+# -------------------------------------------------------------------
+# Manual partial-feature prediction
+# -------------------------------------------------------------------
+
+def predict_late_payment(
+    request: LatePaymentPredictionRequest,
+    db: Session,
+) -> LatePaymentPredictionResponse:
+    """
+    Predict using manually supplied partial features.
+
+    Five unavailable model features are passed as missing values.
+    """
+
+    artifact = load_payment_model()
+
+    features_dict = {
+        "country_code": _to_numeric(request.country_code),
+        "invoice_amount": float(request.invoice_amount),
+        "invoice_month": request.invoice_month,
+        "invoice_dow": request.invoice_dow,
+        "buyer_prior_invoice_count": None,
+        "buyer_hist_late_rate": request.buyer_hist_late_rate,
+        "buyer_hist_avg_delay_days": request.buyer_hist_avg_delay_days,
+        "buyer_hist_delay_std": request.buyer_hist_delay_std,
+        "buyer_hist_max_delay": request.buyer_hist_max_delay,
+        "buyer_last_invoice_delay": None,
+        "buyer_days_since_last_invoice": None,
+        "buyer_hist_avg_amount": None,
+        "amount_vs_buyer_avg_ratio": None,
+        "outstanding_amount_at_invoice": float(
+            request.outstanding_amount_at_invoice
+        ),
+        "outstanding_count_at_invoice": request.outstanding_count_at_invoice,
+        "has_history": request.has_history,
+    }
+
+    (
+        probability,
+        label,
+        on_time_probability,
+        risk_label,
+        reasons,
+    ) = _predict_probability(artifact, features_dict)
+
+    _save_prediction(
+        invoice_id=request.invoice_id,
+        probability=probability,
+        db=db,
+    )
+
+    return LatePaymentPredictionResponse(
+        late_probability=probability,
+        predicted_label=label,
+        on_time_probability=on_time_probability,
+        risk_label=risk_label,
+        partial_features=True,
+        reasons=reasons,
+    )
+
+
+# -------------------------------------------------------------------
+# Automatic full-feature prediction
+# -------------------------------------------------------------------
+
+def predict_late_payment_features(
+    invoice_id: int,
+    features: dict,
+    db: Session,
+) -> LatePaymentPredictionResponseExtended:
+    """Predict using all 16 database-built model features."""
+
+    artifact = load_payment_model()
+
+    missing_features = [
+        feature
+        for feature in FEATURES
+        if feature not in features
+    ]
+
+    if missing_features:
+        raise ValueError(
+            f"Missing model features: {missing_features}"
+        )
+
+    (
+        probability,
+        label,
+        on_time_probability,
+        risk_label,
+        reasons,
+    ) = _predict_probability(artifact, features)
+
+    prediction = _save_prediction(
+        invoice_id=invoice_id,
+        probability=probability,
+        db=db,
+    )
+
     scored_at = (
         getattr(prediction, "predicted_at", None)
         or datetime.now(timezone.utc)
@@ -771,11 +786,11 @@ def predict_late_payment_features(
         predicted_label=label,
         on_time_probability=on_time_probability,
         risk_label=risk_label,
-        threshold=PREDICTION_THRESHOLD,
+        threshold=float(artifact["threshold"]),
         model_name=MODEL_NAME,
         model_version=MODEL_VERSION,
         features_used=features,
-        calibrated=False,
+        calibrated=True,
         scored_at=scored_at,
         partial_features=False,
         reasons=reasons,

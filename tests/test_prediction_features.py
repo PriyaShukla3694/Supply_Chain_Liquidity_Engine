@@ -79,7 +79,7 @@ def test_std_and_max_delay(db_setup):
     add_invoice(db, 99, "BUY-01", "SUP-01", target_date, settled_date=None, days_late=None, is_late=None, status="open")
 
     features = build_features_from_invoice(99, db)
-    expected_std = float(np.std([2.0, 5.0, 8.0], ddof=0))
+    expected_std = float(np.std([2.0, 5.0, 8.0], ddof=1))
     expected_max = 8.0
     assert features["buyer_hist_delay_std"] == expected_std
     assert features["buyer_hist_max_delay"] == expected_max
@@ -93,7 +93,7 @@ def test_missing_delay_values_ignored(db_setup):
     add_invoice(db, 99, "BUY-01", "SUP-01", target_date, settled_date=None, days_late=None, is_late=None, status="open")
 
     features = build_features_from_invoice(99, db)
-    assert features["buyer_hist_delay_std"] == float(np.std([4.0], ddof=0))
+    assert features["buyer_hist_delay_std"] == 0.0
     assert features["buyer_hist_max_delay"] == 4.0
 
 def test_no_usable_delays_results_in_none(db_setup):

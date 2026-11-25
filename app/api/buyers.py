@@ -169,6 +169,11 @@ def get_buyer(
     summary="Get Buyer Score Preview",
     description="Return a read-only scoring preview.",
 )
+@router.get(
+    "/{buyer_id}/score-preview",
+    summary="Get Buyer Score Preview",
+    description="Return a read-only scoring preview.",
+)
 def get_buyer_score(
     buyer_id: str,
     as_of_date: Optional[date] = Query(default=None),

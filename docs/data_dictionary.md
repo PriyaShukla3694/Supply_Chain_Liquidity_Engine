@@ -302,3 +302,27 @@ The generated file is:
 
 
 
+
+## 14. Buyer Risk Scores Ledger (
+isk_scores table)
+
+The 
+isk_scores table stores persistent score snapshots computed for buyers.
+
+### Directionality Note (Higher is Better)
+The score columns in 
+isk_scores:
+- payment_reliability (0–100)
+- inancial_risk (0–100)
+- liquidity_risk (0–100)
+- overall_risk (0–100)
+
+store **HIGHER-IS-BETTER** scores exactly as calculated by the locked business formulas:
+- Overall Score = 0.80 × Reliability + 0.10 × Financial + 0.10 × Liquidity
+- Higher values represent higher payment reliability, healthier financial exposure, and superior liquidity health (i.e., lower credit and payment delay risk).
+- **Do not invert anything.**
+
+### Tier Mapping
+- Tier A: Overall Score >= 80
+- Tier B: 50 <= Overall Score < 80 (and provisional cold-start buyers with < 5 resolved invoices)
+- Tier C: Overall Score < 50

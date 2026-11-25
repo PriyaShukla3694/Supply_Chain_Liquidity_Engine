@@ -21,6 +21,7 @@ from app.api.cash_flows import router as cash_flows_router
 from app.core.security import verify_password, get_password_hash
 from app.api.rag import router as rag_router
 from app.api.rag_answer import router as rag_answer_router
+from app.api.predict import router as predict_router
 from app.api.rag_ingest import router as rag_ingest_router
 
 app = FastAPI(
@@ -91,8 +92,20 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         code = "VALIDATION_ERROR"
     elif exc.status_code == status.HTTP_400_BAD_REQUEST:
         code = "BAD_REQUEST"
+    elif exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+        code = "MODEL_UNAVAILABLE"
     else:
         code = f"HTTP_{exc.status_code}"
+
+    if isinstance(exc.detail, dict):
+        content = dict(exc.detail)
+        if "code" not in content:
+            content["code"] = code
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=content,
+            headers=exc.headers,
+        )
 
     detail = exc.detail
     headers = exc.headers
@@ -117,6 +130,7 @@ app.include_router(dashboard_router)
 app.include_router(rag_router)
 app.include_router(rag_ingest_router)
 app.include_router(rag_answer_router)
+app.include_router(predict_router)
 
 
 # --- Health Endpoints ---
