@@ -53,7 +53,7 @@ docker compose up --build -d
 
 This spins up:
 - **Postgres (`pgvector/pgvector:pg16`)**: Exposed on port `5432` with database `liquidity_engine`
-- **FastAPI backend**: Exposed on port `8000` with hot-reloading (`DATABASE_URL=postgresql://postgres:postgres@db:5432/liquidity_engine`)
+- **FastAPI backend**: Exposed on port `8000` with hot-reloading (`DATABASE_URL=postgresql://<POSTGRES_USER>:<POSTGRES_PASSWORD>@db:5432/<POSTGRES_DB>`)
 
 Verify API endpoints:
 - **Health Check**: `GET http://localhost:8000/health`
