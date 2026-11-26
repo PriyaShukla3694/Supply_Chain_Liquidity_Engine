@@ -1,4 +1,3 @@
-
 const API_BASE_URL =
     import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
@@ -574,6 +573,141 @@ export async function predictInvoiceLatePaymentAuto(
     return response.json();
 }
 
+// ---------- Discount Optimizer API ----------
+export interface DiscountRecommendation {
+    invoice_id: number;
+    buyer_id: string;
+    invoice_amount: string; // Decimal serialized as string
+    days_until_due: number;
+    buyer_tier: string;
+    offered_rate_pct: string; // Decimal serialized as string
+    discount_amount: string; // Decimal serialized as string
+    net_payable_if_accepted: string; // Decimal serialized as string
+    requires_approval: boolean;
+    status: string;
+}
+
+export interface ExcludedDiscountInvoice {
+    invoice_id: number;
+    buyer_id: string;
+    reasons: string[];
+}
+
+export interface DiscountRecommendationsResponse {
+    business_date: string; // ISO date string
+    week_start: string;
+    week_end: string;
+    is_urgent: boolean;
+    eligible_invoice_value: string;
+    weekly_budget: string;
+    existing_allocation: string;
+    new_recommendation_total: string;
+    remaining_budget: string;
+    recommendations: DiscountRecommendation[];
+    excluded_invoices: ExcludedDiscountInvoice[];
+}
+
+export interface DiscountOfferCreateRequest {
+    invoice_id: number;
+    buyer_id: string;
+}
+
+export interface DiscountOfferResponse {
+    offer_id: string;
+    invoice_id: number;
+    buyer_id: string;
+    offer_date: string;
+    deadline_date: string;
+    invoice_amount: string;
+    offered_rate_pct: string;
+    discount_amount: string;
+    net_payable_if_accepted: string;
+    days_accelerated: number;
+    status: string;
+    recommended_by: string;
+    requires_approval: boolean;
+    recommendation_payload: Record<string, any>;
+}
+
+export async function getDiscountRecommendations(
+    token: string
+): Promise<DiscountRecommendationsResponse> {
+    const response = await authFetch(
+        `${API_BASE_URL}/discounts/recommendations`,
+        token
+    );
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to load discount recommendations."
+        );
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+    return response.json();
+}
+
+export async function createDiscountOffer(
+    token: string,
+    payload: DiscountOfferCreateRequest
+): Promise<DiscountOfferResponse> {
+    const response = await authFetch(
+        `${API_BASE_URL}/discounts/offers`,
+        token,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        }
+    );
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to create discount offer."
+        );
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+    return response.json();
+}
+
+export async function approveDiscountOffer(
+    token: string,
+    offerId: string
+): Promise<DiscountOfferResponse> {
+    const response = await authFetch(
+        `${API_BASE_URL}/discounts/offers/${encodeURIComponent(offerId)}/approve`,
+        token,
+        { method: "PUT" }
+    );
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to approve discount offer."
+        );
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+    return response.json();
+}
+
+export async function rejectDiscountOffer(
+    token: string,
+    offerId: string
+): Promise<DiscountOfferResponse> {
+    const response = await authFetch(
+        `${API_BASE_URL}/discounts/offers/${encodeURIComponent(offerId)}/reject`,
+        token,
+        { method: "PUT" }
+    );
+    if (!response.ok) {
+        const errorMsg = await getErrorMessage(
+            response,
+            "Unable to reject discount offer."
+        );
+        throw new ApiError(response.status, errorMsg, errorMsg);
+    }
+    return response.json();
+}
+
+// ---------- RAG API ----------
 export interface RagCitation {
     index: number;
     document_name: string;
