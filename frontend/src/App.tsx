@@ -6,6 +6,9 @@ import Dashboard from "./pages/Dashboard";
 import Buyers from "./pages/Buyers";
 import BuyerDetails from "./pages/BuyerDetails";
 import InvoiceIntelligence from "./pages/InvoiceIntelligence";
+import RiskAnalysis from "./pages/RiskAnalysis";
+import Discounts from "./pages/Discounts";
+import ComingSoon from "./pages/ComingSoon";
 
 function App() {
   const [token, setToken] = useState<string | null>(() =>
@@ -88,6 +91,54 @@ function App() {
           element={
             isLoggedIn ? (
               <BuyerDetails />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* Risk analysis */}
+        <Route
+          path="/risk"
+          element={
+            isLoggedIn ? (
+              <RiskAnalysis />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* Dynamic discounts */}
+        <Route
+          path="/discounts"
+          element={
+            isLoggedIn ? (
+              <Discounts />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* Forecast (coming soon) */}
+        <Route
+          path="/forecast"
+          element={
+            isLoggedIn ? (
+              <ComingSoon title="Cash Flow Forecast" />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* AI Assistant (coming soon) */}
+        <Route
+          path="/assistant"
+          element={
+            isLoggedIn ? (
+              <ComingSoon title="AI Assistant" />
             ) : (
               <Navigate to="/login" replace />
             )
